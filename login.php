@@ -4,7 +4,7 @@ require_once __DIR__ . '/includes/auth.php';
 
 if (session_status() === PHP_SESSION_NONE) session_start();
 if (!empty($_SESSION['bh_logged_in'])) {
-    header('Location: /dashboard.php');
+    header('Location: /dashboard');
     exit;
 }
 
@@ -12,7 +12,7 @@ $error = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $password = $_POST['password'] ?? '';
     if (attempt_login($pdo, $password)) {
-        header('Location: /dashboard.php');
+        header('Location: /dashboard');
         exit;
     }
     $error = 'Contraseña incorrecta.';
