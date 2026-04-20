@@ -1,4 +1,4 @@
-<?php $__user = current_user(); ?>
+<?php $__user = current_user(); $__isAdmin = $__user['role'] === 'admin'; ?>
 <nav class="sidebar d-flex flex-column flex-shrink-0 p-3 bg-dark text-white" style="width:240px;min-height:100vh">
   <a href="/dashboard" class="d-flex align-items-center mb-3 text-white text-decoration-none">
     <span class="fs-5 fw-bold">💄 beautyhauss</span>
@@ -8,11 +8,6 @@
     <li class="nav-item">
       <a href="/dashboard" class="nav-link text-white <?= ($current_page ?? '') === 'dashboard' ? 'active' : '' ?>">
         <i class="bi bi-speedometer2 me-2"></i>Dashboard
-      </a>
-    </li>
-    <li>
-      <a href="/products" class="nav-link text-white <?= ($current_page ?? '') === 'products' ? 'active' : '' ?>">
-        <i class="bi bi-box-seam me-2"></i>Productos
       </a>
     </li>
     <li>
@@ -26,10 +21,12 @@
       </a>
     </li>
     <li>
-      <a href="/expenses" class="nav-link text-white <?= ($current_page ?? '') === 'expenses' ? 'active' : '' ?>">
-        <i class="bi bi-receipt me-2"></i>Gastos
+      <a href="/products" class="nav-link text-white <?= ($current_page ?? '') === 'products' ? 'active' : '' ?>">
+        <i class="bi bi-box-seam me-2"></i>Productos
       </a>
     </li>
+
+    <?php if ($__isAdmin): ?>
     <hr class="text-white">
     <li>
       <a href="/suppliers" class="nav-link text-white <?= ($current_page ?? '') === 'suppliers' ? 'active' : '' ?>">
@@ -46,6 +43,11 @@
         <i class="bi bi-person-video3 me-2"></i>Hosts
       </a>
     </li>
+    <li>
+      <a href="/expenses" class="nav-link text-white <?= ($current_page ?? '') === 'expenses' ? 'active' : '' ?>">
+        <i class="bi bi-receipt me-2"></i>Gastos
+      </a>
+    </li>
     <hr class="text-white">
     <li>
       <a href="/calculator" class="nav-link text-white <?= ($current_page ?? '') === 'calculator' ? 'active' : '' ?>">
@@ -57,7 +59,6 @@
         <i class="bi bi-bar-chart me-2"></i>Reportes
       </a>
     </li>
-    <?php if ($__user['role'] === 'admin'): ?>
     <hr class="text-white">
     <li>
       <a href="/users" class="nav-link text-white <?= ($current_page ?? '') === 'users' ? 'active' : '' ?>">
@@ -78,7 +79,7 @@
     </div>
     <div class="overflow-hidden">
       <div class="text-white small fw-semibold text-truncate"><?= htmlspecialchars($__user['name'] ?? '') ?></div>
-      <div class="text-white-50" style="font-size:.7rem"><?= $__user['role'] === 'admin' ? 'Admin' : 'Staff' ?></div>
+      <div class="text-white-50" style="font-size:.7rem"><?= $__isAdmin ? 'Admin' : 'Staff' ?></div>
     </div>
   </div>
   <a href="/logout" class="nav-link text-white-50"><i class="bi bi-box-arrow-left me-2"></i>Cerrar sesión</a>
