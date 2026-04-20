@@ -42,6 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="alert alert-danger py-2"><?= htmlspecialchars($error) ?></div>
   <?php endif ?>
   <form method="POST">
+    <input type="hidden" name="csrf_token" value="<?= csrfToken() ?>">
     <div class="mb-3">
       <label class="form-label text-white-50">Usuario</label>
       <input type="text" name="username" class="form-control bg-dark text-white border-secondary"

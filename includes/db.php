@@ -1,5 +1,11 @@
 <?php
 require_once __DIR__ . '/../config.php';
+require_once __DIR__ . '/session_config.php';
+require_once __DIR__ . '/security_headers.php';
+require_once __DIR__ . '/csrf.php';
+require_once __DIR__ . '/helpers.php';
+
+date_default_timezone_set('America/Mexico_City');
 
 try {
     $pdo = new PDO(
@@ -14,5 +20,5 @@ try {
     );
 } catch (PDOException $e) {
     http_response_code(500);
-    die('<h2>Error de conexión a la base de datos.</h2><pre>' . htmlspecialchars($e->getMessage()) . '</pre>');
+    die('<h2>Error de conexión a la base de datos.</h2>');
 }
