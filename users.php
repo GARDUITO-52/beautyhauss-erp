@@ -14,13 +14,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'create') {
         $username = strtolower(trim($_POST['username'] ?? ''));
         $name     = trim($_POST['name'] ?? '');
+        $email    = strtolower(trim($_POST['email'] ?? '')) ?: null;
         $role     = in_array($_POST['role'] ?? '', ['admin','staff']) ? $_POST['role'] : 'staff';
         $password = $_POST['password'] ?? '';
         if ($username && $name && strlen($password) >= 6) {
             $hash = password_hash($password, PASSWORD_BCRYPT);
             try {
-                $pdo->prepare("INSERT INTO users (username, name, password_hash, role) VALUES (?,?,?,?)")
-                    ->execute([$username, $name, $hash, $role]);
+                $pdo->prepare("INSERT INTO users (username, name, email, password_hash, role) VALUES (?,?,?,?,?)")
+                    ->execute([$username, $name, $email, $hash, $role]);
                 $success = "Usuario <strong>$username</strong> creado.";
             } catch (PDOException $e) {
                 $error = 'El usuario ya existe.';
@@ -51,7 +52,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-$users = $pdo->query("SELECT id, username, name, role, is_active, created_at FROM users ORDER BY role DESC, name ASC")->fetchAll();
+$users = $pdo->query("SELECT id, username, name, email, role, is_active, created_at FROM users ORDER BY role DESC, name ASC")->fetchAll();
 
 include __DIR__ . '/includes/header.php';
 include __DIR__ . '/includes/sidebar.php';
@@ -71,13 +72,14 @@ include __DIR__ . '/includes/sidebar.php';
     <div class="card-body p-0">
       <table class="table table-hover mb-0">
         <thead class="table-dark">
-          <tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Estado</th><th>Creado</th><th></th></tr>
+          <tr><th>Usuario</th><th>Nombre</th><th>Email</th><th>Rol</th><th>Estado</th><th>Creado</th><th></th></tr>
         </thead>
         <tbody>
         <?php $me = current_user(); foreach ($users as $u): ?>
           <tr class="<?= !$u['is_active'] ? 'text-muted' : '' ?>">
             <td class="fw-semibold"><?= htmlspecialchars($u['username']) ?></td>
             <td><?= htmlspecialchars($u['name']) ?></td>
+            <td class="text-muted small"><?= htmlspecialchars($u['email'] ?? '—') ?></td>
             <td><span class="badge <?= $u['role'] === 'admin' ? 'bg-danger' : 'bg-secondary' ?>"><?= $u['role'] ?></span></td>
             <td><span class="badge <?= $u['is_active'] ? 'bg-success' : 'bg-secondary' ?>"><?= $u['is_active'] ? 'Activo' : 'Inactivo' ?></span></td>
             <td class="text-muted small"><?= date('d/m/Y', strtotime($u['created_at'])) ?></td>
@@ -120,6 +122,10 @@ include __DIR__ . '/includes/sidebar.php';
         <div class="mb-3">
           <label class="form-label">Nombre completo</label>
           <input type="text" name="name" class="form-control bg-dark text-white border-secondary" required>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Email <small class="text-muted">(para recuperar contraseña)</small></label>
+          <input type="email" name="email" class="form-control bg-dark text-white border-secondary">
         </div>
         <div class="mb-3">
           <label class="form-label">Rol</label>

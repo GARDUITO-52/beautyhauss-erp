@@ -54,6 +54,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </div>
     <button type="submit" class="btn w-100 fw-bold" style="background:#d4537e;color:#fff">Entrar</button>
   </form>
+  <a href="/forgot_password" class="d-block text-center mt-3 text-white-50 small">¿Olvidaste tu contraseña?</a>
 </div>
 </body>
 </html>
