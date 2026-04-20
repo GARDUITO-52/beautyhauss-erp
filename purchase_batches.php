@@ -11,7 +11,7 @@ if (isset($_GET['action'])) {
     // ── Batch list ──
     if ($action === 'list') {
         $rows = $pdo->query("
-            SELECT b.id, b.reference_no, b.batch_date, b.total_usd, b.fx_rate,
+            SELECT b.id, b.reference_no, b.batch_date, b.total_usd,
                    b.investor, b.status, b.notes,
                    s.name AS supplier_name,
                    COUNT(bi.id) AS item_count,
@@ -46,8 +46,8 @@ if (isset($_GET['action'])) {
         csrfGuard();
         $d = json_decode(file_get_contents('php://input'), true) ?? [];
         if (empty($d['supplier_id']) || empty($d['reference_no']) || empty($d['batch_date'])) jsonErr('Proveedor, referencia y fecha son requeridos.');
-        $pdo->prepare("INSERT INTO purchase_batches (supplier_id, reference_no, batch_date, total_usd, fx_rate, investor, status, notes) VALUES (?,?,?,?,?,?,?,?)")
-            ->execute([$d['supplier_id'], trim($d['reference_no']), $d['batch_date'], $d['total_usd'] ?? 0, $d['fx_rate'] ?? 20.50, $d['investor'] ?? 'ARTURO', $d['status'] ?? 'PENDING', trim($d['notes'] ?? '')]);
+        $pdo->prepare("INSERT INTO purchase_batches (supplier_id, reference_no, batch_date, total_usd, investor, status, notes) VALUES (?,?,?,?,?,?,?)")
+            ->execute([$d['supplier_id'], trim($d['reference_no']), $d['batch_date'], $d['total_usd'] ?? 0, $d['investor'] ?? 'JACK', $d['status'] ?? 'PENDING', trim($d['notes'] ?? '')]);
         $id = $pdo->lastInsertId();
         logActivity($pdo, 'batches', 'create', $id, $d['reference_no']);
         jsonOk(['id' => $id]);
@@ -59,8 +59,8 @@ if (isset($_GET['action'])) {
         $d  = json_decode(file_get_contents('php://input'), true) ?? [];
         $id = (int)($d['id'] ?? 0);
         if (!$id || empty($d['supplier_id'])) jsonErr('Datos inválidos.');
-        $pdo->prepare("UPDATE purchase_batches SET supplier_id=?, reference_no=?, batch_date=?, total_usd=?, fx_rate=?, investor=?, status=?, notes=? WHERE id=?")
-            ->execute([$d['supplier_id'], trim($d['reference_no']), $d['batch_date'], $d['total_usd'] ?? 0, $d['fx_rate'] ?? 20.50, $d['investor'] ?? 'ARTURO', $d['status'] ?? 'PENDING', trim($d['notes'] ?? ''), $id]);
+        $pdo->prepare("UPDATE purchase_batches SET supplier_id=?, reference_no=?, batch_date=?, total_usd=?, investor=?, status=?, notes=? WHERE id=?")
+            ->execute([$d['supplier_id'], trim($d['reference_no']), $d['batch_date'], $d['total_usd'] ?? 0, $d['investor'] ?? 'JACK', $d['status'] ?? 'PENDING', trim($d['notes'] ?? ''), $id]);
         logActivity($pdo, 'batches', 'update', $id, $d['reference_no']);
         jsonOk();
     }
@@ -130,38 +130,47 @@ if (isset($_GET['action'])) {
         jsonOk(['inserted' => $inserted, 'skipped' => $skipped, 'errors' => $errors]);
     }
 
+    // ── Quick supplier create ──
+    if ($action === 'quick_supplier') {
+        csrfGuard();
+        $d    = json_decode(file_get_contents('php://input'), true) ?? [];
+        $name = trim($d['name'] ?? '');
+        if (!$name) jsonErr('Nombre requerido.');
+        $pdo->prepare("INSERT INTO suppliers (name) VALUES (?)")->execute([$name]);
+        $id = $pdo->lastInsertId();
+        logActivity($pdo, 'suppliers', 'create', $id, $name);
+        jsonOk(['id' => $id, 'name' => $name]);
+    }
+
     // ── Generate Products ──
     if ($action === 'generate_products') {
         csrfGuard();
         $batch_id = (int)($_GET['batch_id'] ?? 0);
         if (!$batch_id) jsonErr('batch_id requerido.');
 
-        $batch = $pdo->prepare("SELECT fx_rate FROM purchase_batches WHERE id=?");
-        $batch->execute([$batch_id]); $batch = $batch->fetch();
-        if (!$batch) jsonErr('Lote no encontrado.');
+        $exists_batch = $pdo->prepare("SELECT COUNT(*) FROM purchase_batches WHERE id=?");
+        $exists_batch->execute([$batch_id]);
+        if (!(int)$exists_batch->fetchColumn()) jsonErr('Lote no encontrado.');
 
-        $fx   = (float)$batch['fx_rate'];
-        // Rescue price: (cost_usd × fx) / (1 - 0.109) + (0.30 × fx)
         $items = $pdo->prepare("SELECT * FROM purchase_batch_items WHERE batch_id=?");
         $items->execute([$batch_id]); $items = $items->fetchAll();
 
         $created = 0; $skipped = 0;
         $insert  = $pdo->prepare("INSERT INTO products
-            (batch_item_id, brand, description, upc, color, size, packaging_type, cost_usd, fx_rate_at_purchase, cost_mxn, rescue_price_mxn, stock_qty)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+            (batch_item_id, brand, description, upc, color, size, packaging_type, cost_usd, rescue_price_usd, stock_qty)
+            VALUES (?,?,?,?,?,?,?,?,?,?)");
 
         $pdo->beginTransaction();
         try {
             foreach ($items as $item) {
-                // Skip if product already exists for this batch item
                 $exists = $pdo->prepare("SELECT COUNT(*) FROM products WHERE batch_item_id=?");
                 $exists->execute([$item['id']]);
                 if ((int)$exists->fetchColumn() > 0) { $skipped++; continue; }
 
-                $cost_usd      = (float)$item['unit_cost_usd'];
-                $cost_mxn      = round($cost_usd * $fx, 2);
-                $rescue        = round(($cost_usd * $fx) / (1 - 0.109) + (0.30 * $fx), 2);
-                $insert->execute([$item['id'], $item['brand'], $item['description'], $item['upc'], $item['color'], $item['size'], $item['packaging_type'], $cost_usd, $fx, $cost_mxn, $rescue, $item['qty']]);
+                $cost_usd = (float)$item['unit_cost_usd'];
+                // Rescue price USD: cost / (1 - Whatnot fees 10.9%) + $0.30 flat, min $1.00
+                $rescue   = max(1.00, round($cost_usd / (1 - 0.109) + 0.30, 2));
+                $insert->execute([$item['id'], $item['brand'], $item['description'], $item['upc'], $item['color'], $item['size'], $item['packaging_type'], $cost_usd, $rescue, $item['qty']]);
                 $created++;
             }
             $pdo->commit();
@@ -171,7 +180,37 @@ if (isset($_GET['action'])) {
         }
 
         logActivity($pdo, 'batches', 'generate_products', $batch_id, "$created productos generados");
-        jsonOk(['created' => $created, 'skipped' => $skipped]);
+
+        // Streaming + goal estimate for this batch
+        $st = $pdo->prepare("
+            SELECT COUNT(*) AS skus,
+                   COALESCE(SUM(p.stock_qty), 0) AS units,
+                   COALESCE(AVG(p.rescue_price_usd), 0) AS avg_rescue
+            FROM products p
+            INNER JOIN purchase_batch_items bi ON bi.id = p.batch_item_id
+            WHERE bi.batch_id = ?
+        ");
+        $st->execute([$batch_id]); $st = $st->fetch();
+        $stream_hours    = round((int)$st['units'] * 5 / 3600, 1);
+        $potential_rev   = round((float)$st['avg_rescue'] * (int)$st['units'], 2);
+
+        $cfg_row = $pdo->query("SELECT config_key, config_value FROM system_config")->fetchAll(PDO::FETCH_KEY_PAIR);
+        $goal_amt        = (float)($cfg_row['goal_amount_usd'] ?? 60000);
+        $streamer_hourly = (float)($cfg_row['streamer_hourly_usd'] ?? 50);
+        $stream_cost     = round($stream_hours * $streamer_hourly, 2);
+
+        jsonOk([
+            'created'       => $created,
+            'skipped'       => $skipped,
+            'stream_skus'   => (int)$st['skus'],
+            'stream_units'  => (int)$st['units'],
+            'stream_hours'  => $stream_hours,
+            'stream_cost'   => $stream_cost,
+            'avg_rescue'    => round((float)$st['avg_rescue'], 2),
+            'potential_rev' => $potential_rev,
+            'goal'          => $goal_amt,
+            'goal_pct'      => $goal_amt > 0 ? round($potential_rev / $goal_amt * 100, 1) : 0,
+        ]);
     }
 
     jsonErr('Acción no reconocida.', 400);
@@ -179,7 +218,6 @@ if (isset($_GET['action'])) {
 
 // ── Page ───────────────────────────────────────────────────────────────────
 $suppliers    = $pdo->query("SELECT id, name FROM suppliers ORDER BY name")->fetchAll();
-$fx_cfg       = $pdo->query("SELECT config_value FROM system_config WHERE config_key='fx_rate'")->fetchColumn();
 $page_title   = 'Lotes de Compra — beautyhauss ERP';
 $current_page = 'batches';
 include __DIR__ . '/includes/header.php';
@@ -218,7 +256,7 @@ include __DIR__ . '/includes/sidebar.php';
 </div>
 
 <!-- Modal: Create/Edit batch -->
-<div class="modal fade" id="modalBatch" tabindex="-1">
+<div class="modal fade" id="modalBatch" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
   <div class="modal-dialog modal-lg">
     <div class="modal-content bg-dark text-white">
       <div class="modal-header border-secondary">
@@ -230,12 +268,15 @@ include __DIR__ . '/includes/sidebar.php';
         <div class="row g-3">
           <div class="col-md-6">
             <label class="form-label">Proveedor <span class="text-danger">*</span></label>
-            <select id="bSupplier" class="form-select bg-dark text-white border-secondary">
-              <option value="">— Seleccionar —</option>
-              <?php foreach ($suppliers as $s): ?>
-              <option value="<?= $s['id'] ?>"><?= htmlspecialchars($s['name']) ?></option>
-              <?php endforeach ?>
-            </select>
+            <div class="input-group">
+              <select id="bSupplier" class="form-select bg-dark text-white border-secondary">
+                <option value="">— Seleccionar —</option>
+                <?php foreach ($suppliers as $s): ?>
+                <option value="<?= $s['id'] ?>"><?= htmlspecialchars($s['name']) ?></option>
+                <?php endforeach ?>
+              </select>
+              <button type="button" class="btn btn-outline-secondary" title="Nuevo proveedor" onclick="openQuickSupplier()">＋</button>
+            </div>
           </div>
           <div class="col-md-6">
             <label class="form-label">Referencia / N° Factura <span class="text-danger">*</span></label>
@@ -252,19 +293,17 @@ include __DIR__ . '/includes/sidebar.php';
             <input type="number" id="bTotal" class="form-control bg-dark text-white border-secondary" step="0.01" min="0">
           </div>
           <div class="col-md-4">
-            <label class="form-label">FX Rate (MXN/USD)</label>
-            <input type="number" id="bFx" class="form-control bg-dark text-white border-secondary" step="0.0001" value="<?= htmlspecialchars($fx_cfg ?? '20.50') ?>">
-          </div>
-        </div>
-        <div class="row g-3 mt-0">
-          <div class="col-md-4">
             <label class="form-label">Inversionista</label>
             <select id="bInvestor" class="form-select bg-dark text-white border-secondary">
-              <option value="ARTURO">Arturo</option>
               <option value="JACK">Jack</option>
+              <option value="NESIM">Nesim</option>
+              <option value="ALEX">Alex</option>
+              <option value="SIMON">Simon</option>
               <option value="COMPARTIDO">Compartido</option>
             </select>
           </div>
+        </div>
+        <div class="row g-3 mt-0">
           <div class="col-md-4">
             <label class="form-label">Status</label>
             <select id="bStatus" class="form-select bg-dark text-white border-secondary">
@@ -289,7 +328,7 @@ include __DIR__ . '/includes/sidebar.php';
 </div>
 
 <!-- Modal: CSV Import -->
-<div class="modal fade" id="modalCsv" tabindex="-1">
+<div class="modal fade" id="modalCsv" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
   <div class="modal-dialog modal-xl">
     <div class="modal-content bg-dark text-white">
       <div class="modal-header border-secondary">
@@ -326,8 +365,46 @@ include __DIR__ . '/includes/sidebar.php';
   </div>
 </div>
 
+<!-- Modal: Stream Result -->
+<div class="modal fade" id="modalStreamResult" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+  <div class="modal-dialog">
+    <div class="modal-content bg-dark text-white">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title"><i class="bi bi-camera-video me-2"></i>Productos generados</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="streamResult"></div>
+      <div class="modal-footer border-secondary">
+        <button class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+        <a href="/products" class="btn fw-bold" style="background:#d4537e;color:#fff">Ver Productos</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Quick Supplier -->
+<div class="modal fade" id="modalQuickSupplier" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content bg-dark text-white">
+      <div class="modal-header border-secondary">
+        <h6 class="modal-title">Nuevo proveedor</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label">Nombre <span class="text-danger">*</span></label>
+        <input type="text" id="qsName" class="form-control bg-dark text-white border-secondary" placeholder="ej. Beauty Wholesale Inc.">
+        <div id="qsError" class="alert alert-danger py-2 mt-2 d-none"></div>
+      </div>
+      <div class="modal-footer border-secondary">
+        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+        <button class="btn btn-sm fw-bold" style="background:#d4537e;color:#fff" onclick="saveQuickSupplier()">Crear</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
-var _batchModal = null, _csvModal = null;
+var _batchModal = null, _csvModal = null, _qsModal = null;
 var _activeBatch = null;
 var _csvHeaders  = [], _csvRows = [];
 var _csvBatchId  = null;
@@ -358,12 +435,13 @@ var AUTO_MAP = {
 };
 
 var STATUS_LABELS = { PENDING:'Pendiente', RECEIVED:'Recibido', PARTIAL:'Parcial' };
-var INV_LABELS    = { ARTURO:'Arturo', JACK:'Jack', COMPARTIDO:'Compartido' };
-var INV_COLORS    = { ARTURO:'primary', JACK:'warning', COMPARTIDO:'info' };
+var INV_LABELS = { JACK:'Jack', NESIM:'Nesim', ALEX:'Alex', SIMON:'Simon', COMPARTIDO:'Compartido' };
+var INV_COLORS = { JACK:'warning', NESIM:'info', ALEX:'primary', SIMON:'success', COMPARTIDO:'secondary' };
 
 document.addEventListener('DOMContentLoaded', function() {
     _batchModal = new bootstrap.Modal(document.getElementById('modalBatch'));
     _csvModal   = new bootstrap.Modal(document.getElementById('modalCsv'));
+    _qsModal    = new bootstrap.Modal(document.getElementById('modalQuickSupplier'));
     loadBatches();
 });
 
@@ -465,8 +543,7 @@ function openCreate() {
     document.getElementById('bRef').value = '';
     document.getElementById('bDate').value = new Date().toISOString().slice(0,10);
     document.getElementById('bTotal').value = '';
-    document.getElementById('bFx').value = '<?= htmlspecialchars($fx_cfg ?? '20.50') ?>';
-    document.getElementById('bInvestor').value = 'ARTURO';
+    document.getElementById('bInvestor').value = 'JACK';
     document.getElementById('bStatus').value = 'PENDING';
     document.getElementById('bNotes').value = '';
     document.getElementById('batchFormError').classList.add('d-none');
@@ -483,7 +560,6 @@ function openEdit(id) {
         document.getElementById('bRef').value      = r.reference_no;
         document.getElementById('bDate').value     = r.batch_date;
         document.getElementById('bTotal').value    = r.total_usd;
-        document.getElementById('bFx').value       = r.fx_rate;
         document.getElementById('bInvestor').value = r.investor;
         document.getElementById('bStatus').value   = r.status;
         document.getElementById('bNotes').value    = r.notes || '';
@@ -500,7 +576,6 @@ function saveBatch() {
         reference_no: document.getElementById('bRef').value.trim(),
         batch_date:  document.getElementById('bDate').value,
         total_usd:   parseFloat(document.getElementById('bTotal').value||0),
-        fx_rate:     parseFloat(document.getElementById('bFx').value||20.50),
         investor:    document.getElementById('bInvestor').value,
         status:      document.getElementById('bStatus').value,
         notes:       document.getElementById('bNotes').value.trim(),
@@ -623,12 +698,57 @@ function doImport() {
         });
 }
 
+// ── Quick Supplier ──
+function openQuickSupplier() {
+    document.getElementById('qsName').value = '';
+    document.getElementById('qsError').classList.add('d-none');
+    _qsModal.show();
+}
+
+function saveQuickSupplier() {
+    var name = document.getElementById('qsName').value.trim();
+    if (!name) { document.getElementById('qsError').textContent = 'Nombre requerido.'; document.getElementById('qsError').classList.remove('d-none'); return; }
+    apiFetch('?action=quick_supplier', { body: { name: name } }).then(function(d) {
+        if (!d.ok) { document.getElementById('qsError').textContent = d.error; document.getElementById('qsError').classList.remove('d-none'); return; }
+        var opt = new Option(d.data.name, d.data.id);
+        document.getElementById('bSupplier').appendChild(opt);
+        document.getElementById('bSupplier').value = d.data.id;
+        _qsModal.hide();
+        toast('Proveedor "' + d.data.name + '" creado.');
+    });
+}
+
 // ── Generate Products ──
 function generateProducts(batchId) {
-    if (!confirm('¿Generar productos en el catálogo para este lote?\nSe calcularán costos MXN y precios rescue automáticamente.')) return;
+    if (!confirm('¿Generar productos en el catálogo para este lote?\nSe calcularán costos y precios rescue automáticamente.')) return;
     apiFetch('?action=generate_products&batch_id=' + batchId, { method: 'POST' }).then(function(d) {
         if (!d.ok) { toast(d.error, 'error'); return; }
-        toast(d.data.created + ' productos generados' + (d.data.skipped ? ' (' + d.data.skipped + ' ya existían)' : '') + '.');
+        var r = d.data;
+        var shows2h = Math.ceil(r.stream_hours / 2);
+        var shows3h = Math.ceil(r.stream_hours / 3);
+        var goalBar = Math.min(100, r.goal_pct);
+        document.getElementById('streamResult').innerHTML =
+            '<div class="alert alert-success mb-0 py-2">'
+            + '<strong>' + fmtN(r.created) + ' productos generados</strong>'
+            + (r.skipped ? ' <span class="text-muted small">(' + r.skipped + ' ya existían)</span>' : '')
+            + '</div>'
+            + '<div class="card bg-dark border-secondary mt-3"><div class="card-body">'
+            + '<div class="fw-bold mb-3" style="color:#d4537e"><i class="bi bi-camera-video me-2"></i>Streaming Plan — Este lote</div>'
+            + '<div class="row text-center g-2 mb-3">'
+            + '<div class="col-3"><div class="fw-bold text-warning">' + fmtN(r.stream_skus) + '</div><div class="text-muted" style="font-size:.75rem">SKUs</div></div>'
+            + '<div class="col-3"><div class="fw-bold text-info">' + fmtN(r.stream_units) + '</div><div class="text-muted" style="font-size:.75rem">Unidades</div></div>'
+            + '<div class="col-3"><div class="fw-bold">' + r.stream_hours + 'h</div><div class="text-muted" style="font-size:.75rem">de stream</div></div>'
+            + '<div class="col-3"><div class="fw-bold">' + shows2h + '/' + shows3h + '</div><div class="text-muted" style="font-size:.75rem">shows 2h/3h</div></div>'
+            + '</div>'
+            + '<div class="d-flex justify-content-between small mb-1"><span class="text-muted">Costo streamer ($' + fmt2(r.stream_cost / r.stream_hours) + '/hr)</span><span class="text-danger fw-bold">$' + fmt2(r.stream_cost) + '</span></div>'
+            + '<hr class="border-secondary my-2">'
+            + '<div class="fw-semibold mb-2 small" style="color:#d4537e"><i class="bi bi-bullseye me-1"></i>Contribución a meta $' + fmtN(r.goal) + '</div>'
+            + '<div class="d-flex justify-content-between small mb-1"><span class="text-muted">Precio rescue promedio</span><span class="fw-bold">$' + fmt2(r.avg_rescue) + '</span></div>'
+            + '<div class="d-flex justify-content-between small mb-2"><span class="text-muted">Revenue potencial de este lote</span><span class="fw-bold text-success">$' + fmt2(r.potential_rev) + '</span></div>'
+            + '<div class="progress mb-1" style="height:8px"><div class="progress-bar bg-success" style="width:' + goalBar + '%"></div></div>'
+            + '<div class="text-muted text-end" style="font-size:.72rem">' + r.goal_pct + '% de la meta</div>'
+            + '</div></div>';
+        bootstrap.Modal.getOrCreateInstance(document.getElementById('modalStreamResult')).show();
     });
 }
 </script>

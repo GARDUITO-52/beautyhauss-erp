@@ -43,6 +43,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
+    if ($action === 'edit') {
+        $uid   = (int)($_POST['user_id'] ?? 0);
+        $name  = trim($_POST['name'] ?? '');
+        $email = strtolower(trim($_POST['email'] ?? '')) ?: null;
+        $role  = in_array($_POST['role'] ?? '', ['admin','staff']) ? $_POST['role'] : 'staff';
+        if ($uid && $name) {
+            $pdo->prepare("UPDATE users SET name=?, email=?, role=? WHERE id=?")->execute([$name, $email, $role, $uid]);
+            $success = 'Usuario actualizado.';
+        } else {
+            $error = 'Nombre requerido.';
+        }
+    }
+
     if ($action === 'toggle') {
         $uid = (int)($_POST['user_id'] ?? 0);
         $me  = current_user();
@@ -91,6 +104,14 @@ include __DIR__ . '/includes/sidebar.php';
                 <button class="btn btn-sm btn-outline-secondary"><?= $u['is_active'] ? 'Desactivar' : 'Activar' ?></button>
               </form>
               <?php endif ?>
+              <button class="btn btn-sm btn-outline-info ms-1"
+                data-bs-toggle="modal" data-bs-target="#modalEdit"
+                data-uid="<?= $u['id'] ?>"
+                data-name="<?= htmlspecialchars($u['name']) ?>"
+                data-email="<?= htmlspecialchars($u['email'] ?? '') ?>"
+                data-role="<?= htmlspecialchars($u['role']) ?>">
+                Editar
+              </button>
               <button class="btn btn-sm btn-outline-warning ms-1"
                 data-bs-toggle="modal" data-bs-target="#modalReset"
                 data-uid="<?= $u['id'] ?>" data-uname="<?= htmlspecialchars($u['username']) ?>">
@@ -106,7 +127,7 @@ include __DIR__ . '/includes/sidebar.php';
 </div>
 
 <!-- Modal: Crear usuario -->
-<div class="modal fade" id="modalCreate" tabindex="-1">
+<div class="modal fade" id="modalCreate" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
   <div class="modal-dialog">
     <form method="POST" class="modal-content bg-dark text-white">
       <input type="hidden" name="action" value="create">
@@ -147,8 +168,43 @@ include __DIR__ . '/includes/sidebar.php';
   </div>
 </div>
 
+<!-- Modal: Edit user -->
+<div class="modal fade" id="modalEdit" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+  <div class="modal-dialog">
+    <form method="POST" class="modal-content bg-dark text-white">
+      <input type="hidden" name="action" value="edit">
+      <input type="hidden" name="user_id" id="editUserId">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title">Editar usuario</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">Nombre completo</label>
+          <input type="text" name="name" id="editName" class="form-control bg-dark text-white border-secondary" required>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Email</label>
+          <input type="email" name="email" id="editEmail" class="form-control bg-dark text-white border-secondary">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Rol</label>
+          <select name="role" id="editRole" class="form-select bg-dark text-white border-secondary">
+            <option value="staff">Staff</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer border-secondary">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="submit" class="btn fw-bold" style="background:#d4537e;color:#fff">Guardar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- Modal: Reset password -->
-<div class="modal fade" id="modalReset" tabindex="-1">
+<div class="modal fade" id="modalReset" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
   <div class="modal-dialog">
     <form method="POST" class="modal-content bg-dark text-white">
       <input type="hidden" name="action" value="reset_password">
@@ -170,8 +226,15 @@ include __DIR__ . '/includes/sidebar.php';
 </div>
 
 <script>
-document.getElementById('modalReset').addEventListener('show.bs.modal', e => {
-  document.getElementById('resetUserId').value   = e.relatedTarget.dataset.uid;
+document.getElementById('modalEdit').addEventListener('show.bs.modal', function(e) {
+  var btn = e.relatedTarget;
+  document.getElementById('editUserId').value = btn.dataset.uid;
+  document.getElementById('editName').value   = btn.dataset.name;
+  document.getElementById('editEmail').value  = btn.dataset.email;
+  document.getElementById('editRole').value   = btn.dataset.role;
+});
+document.getElementById('modalReset').addEventListener('show.bs.modal', function(e) {
+  document.getElementById('resetUserId').value        = e.relatedTarget.dataset.uid;
   document.getElementById('resetUserName').textContent = e.relatedTarget.dataset.uname;
 });
 </script>

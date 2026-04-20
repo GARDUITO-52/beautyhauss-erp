@@ -18,7 +18,7 @@ if (isset($_GET['action'])) {
         $total  = $pdo->prepare("SELECT COUNT(*) FROM products p $where");
         $total->execute($params); $total = (int)$total->fetchColumn();
         $cols   = $is_admin
-            ? "p.id, p.sku_internal, p.brand, p.description, p.upc, p.color, p.size, p.stock_qty, p.cost_usd, p.cost_mxn, p.rescue_price_mxn"
+            ? "p.id, p.sku_internal, p.brand, p.description, p.upc, p.color, p.size, p.stock_qty, p.cost_usd, p.rescue_price_usd"
             : "p.id, p.sku_internal, p.brand, p.description, p.upc, p.color, p.size, p.stock_qty";
         $stmt   = $pdo->prepare("SELECT $cols FROM products p $where ORDER BY p.brand, p.description LIMIT $limit OFFSET $offset");
         $stmt->execute($params);
@@ -72,7 +72,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 function renderHead() {
     var cols = ['SKU','Marca','Descripción','UPC','Color','Talla','Stock'];
-    if (IS_ADMIN) cols = cols.concat(['Costo USD','Costo MXN','Rescue Price']);
+    if (IS_ADMIN) cols = cols.concat(['Costo USD','Rescue Price USD']);
     document.getElementById('tableHead').innerHTML = '<tr>' + cols.map(function(c) { return '<th>' + c + '</th>'; }).join('') + '</tr>';
 }
 
@@ -103,8 +103,7 @@ function renderTable(rows) {
         ];
         if (IS_ADMIN) cells = cells.concat([
             '<td>' + fmt2(r.cost_usd) + '</td>',
-            '<td>' + fmt2(r.cost_mxn) + '</td>',
-            '<td class="text-warning fw-bold">' + fmt2(r.rescue_price_mxn) + '</td>',
+            '<td class="text-warning fw-bold">' + fmt2(r.rescue_price_usd) + '</td>',
         ]);
         return '<tr>' + cells.join('') + '</tr>';
     }).join('');

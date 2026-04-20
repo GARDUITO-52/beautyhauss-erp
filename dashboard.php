@@ -8,6 +8,23 @@ $current_page = 'dashboard';
 $user         = current_user();
 $is_admin     = $user['role'] === 'admin';
 
+// ── AJAX ───────────────────────────────────────────────────────────────────
+if (isset($_GET['action'])) {
+    header('Content-Type: application/json');
+    require_admin();
+    if ($_GET['action'] === 'save_goal') {
+        csrfGuard();
+        $d = json_decode(file_get_contents('php://input'), true) ?? [];
+        $keys = ['goal_amount_usd', 'goal_start_date', 'goal_end_date', 'streamer_hourly_usd'];
+        $stmt = $pdo->prepare("INSERT INTO system_config (config_key, config_value) VALUES (?,?) ON DUPLICATE KEY UPDATE config_value=?");
+        foreach ($keys as $k) {
+            if (isset($d[$k]) && $d[$k] !== '') $stmt->execute([$k, $d[$k], $d[$k]]);
+        }
+        jsonOk();
+    }
+    jsonErr('Acción no reconocida.', 400);
+}
+
 // ── STAFF DASHBOARD ────────────────────────────────────────────────────────
 if (!$is_admin) {
     $next_show = $pdo->query("
@@ -97,6 +114,27 @@ $gross_margin = $revenue > 0 ? (($net_earn - $cogs) / $revenue * 100) : 0;
 $total_units = (int)$pdo->query("SELECT COALESCE(SUM(qty),0) FROM purchase_batch_items")->fetchColumn();
 $sold_units  = (int)$pdo->query("SELECT COALESCE(SUM(qty),0) FROM order_items")->fetchColumn();
 $sell_through = $total_units > 0 ? ($sold_units / $total_units * 100) : 0;
+
+$inv = $pdo->query("SELECT COUNT(*) AS skus, COALESCE(SUM(stock_qty),0) AS units FROM products WHERE stock_qty > 0")->fetch();
+$stream_hours  = round($inv['units'] * 5 / 3600, 1);
+$stream_shows2 = $inv['units'] > 0 ? (int)ceil($stream_hours / 2) : 0;
+$stream_shows3 = $inv['units'] > 0 ? (int)ceil($stream_hours / 3) : 0;
+
+// Goal-aware streaming math
+$streamer_hourly = (float)($cfg['streamer_hourly_usd'] ?? 50);
+$avg_unit_price  = $sold_units > 0
+    ? $revenue / $sold_units
+    : (float)$pdo->query("SELECT COALESCE(AVG(rescue_price_usd),0) FROM products WHERE rescue_price_usd > 0")->fetchColumn();
+$remaining_goal  = max(0, $goal - $revenue);
+$units_for_goal  = $avg_unit_price > 0 ? (int)ceil($remaining_goal / $avg_unit_price) : 0;
+$hours_for_goal  = round($units_for_goal * 5 / 3600, 1);
+$streamer_cost   = round($hours_for_goal * $streamer_hourly, 2);
+$shows_goal_2h   = $units_for_goal > 0 ? (int)ceil($hours_for_goal / 2) : 0;
+// Shabbat: Fri 6pm–Sat 9pm = 27h blocked. Assuming 2h shows, available slots/week ≈ floor(141/2)=70 max
+// Practical cadences: 3, 5, 7 shows/week
+$weeks_3 = $shows_goal_2h > 0 ? (int)ceil($shows_goal_2h / 3) : 0;
+$weeks_5 = $shows_goal_2h > 0 ? (int)ceil($shows_goal_2h / 5) : 0;
+$weeks_7 = $shows_goal_2h > 0 ? (int)ceil($shows_goal_2h / 7) : 0;
 
 $progress_pct = $goal > 0 ? min(100, ($revenue / $goal * 100)) : 0;
 $pace_daily   = $days_passed > 0 ? $revenue / $days_passed : 0;
@@ -192,6 +230,90 @@ include __DIR__ . '/includes/sidebar.php';
     <?php endforeach ?>
   </div>
 
+  <!-- Streaming Plan -->
+  <div class="card shadow-sm mb-4" style="border-left:4px solid #d4537e">
+    <div class="card-body">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <div class="fw-bold"><i class="bi bi-camera-video me-2" style="color:#d4537e"></i>Streaming Plan</div>
+        <button class="btn btn-sm btn-outline-secondary" onclick="openGoalConfig()">
+          <i class="bi bi-gear me-1"></i>Configurar meta
+        </button>
+      </div>
+      <?php if ($inv['units'] > 0): ?>
+      <div class="row g-3">
+        <!-- Inventario -->
+        <div class="col-md-4">
+          <div class="small text-muted text-uppercase fw-semibold mb-2">Inventario total</div>
+          <div class="d-flex justify-content-between mb-1">
+            <span class="text-muted small">SKUs en stock</span>
+            <span class="fw-bold text-warning"><?= number_format($inv['skus']) ?></span>
+          </div>
+          <div class="d-flex justify-content-between mb-1">
+            <span class="text-muted small">Unidades</span>
+            <span class="fw-bold text-info"><?= number_format($inv['units']) ?></span>
+          </div>
+          <div class="d-flex justify-content-between mb-1">
+            <span class="text-muted small">Horas de stream</span>
+            <span class="fw-bold"><?= $stream_hours ?>h</span>
+          </div>
+          <div class="d-flex justify-content-between">
+            <span class="text-muted small">Shows de 2h / 3h</span>
+            <span class="fw-bold"><?= $stream_shows2 ?> / <?= $stream_shows3 ?></span>
+          </div>
+        </div>
+        <!-- Meta -->
+        <div class="col-md-4 border-start border-secondary">
+          <div class="small text-muted text-uppercase fw-semibold mb-2">Para meta $<?= number_format($goal, 0) ?></div>
+          <?php if ($avg_unit_price > 0): ?>
+          <div class="d-flex justify-content-between mb-1">
+            <span class="text-muted small">Precio prom/unidad</span>
+            <span class="fw-bold">$<?= number_format($avg_unit_price, 2) ?></span>
+          </div>
+          <div class="d-flex justify-content-between mb-1">
+            <span class="text-muted small">Unidades a vender</span>
+            <span class="fw-bold text-success"><?= number_format($units_for_goal) ?></span>
+          </div>
+          <div class="d-flex justify-content-between mb-1">
+            <span class="text-muted small">Horas de stream</span>
+            <span class="fw-bold"><?= $hours_for_goal ?>h</span>
+          </div>
+          <div class="d-flex justify-content-between">
+            <span class="text-muted small">Costo streamer (@$<?= number_format($streamer_hourly, 0) ?>/hr)</span>
+            <span class="fw-bold text-danger">$<?= number_format($streamer_cost, 0) ?></span>
+          </div>
+          <?php else: ?>
+          <p class="text-muted small mb-0">Genera productos para calcular precio promedio.</p>
+          <?php endif ?>
+        </div>
+        <!-- Calendario Shabbat -->
+        <div class="col-md-4 border-start border-secondary">
+          <div class="small text-muted text-uppercase fw-semibold mb-2">Calendario <span class="badge bg-warning text-dark ms-1" style="font-size:.65rem">Shabbat off</span></div>
+          <?php if ($shows_goal_2h > 0): ?>
+          <div class="d-flex justify-content-between mb-1">
+            <span class="text-muted small">3 shows/semana</span>
+            <span class="fw-bold"><?= $weeks_3 ?> semanas</span>
+          </div>
+          <div class="d-flex justify-content-between mb-1">
+            <span class="text-muted small">5 shows/semana</span>
+            <span class="fw-bold text-warning"><?= $weeks_5 ?> semanas</span>
+          </div>
+          <div class="d-flex justify-content-between mb-1">
+            <span class="text-muted small">7 shows/semana</span>
+            <span class="fw-bold text-success"><?= $weeks_7 ?> semanas</span>
+          </div>
+          <div class="text-muted mt-2" style="font-size:.7rem">Vie 6pm → Sáb 9pm bloqueado · Shows de 2h</div>
+          <?php else: ?>
+          <p class="text-muted small mb-0">Configura meta para ver proyección.</p>
+          <?php endif ?>
+        </div>
+      </div>
+      <div class="text-muted mt-3" style="font-size:.72rem">Calculado a 5 seg/unidad</div>
+      <?php else: ?>
+      <p class="text-muted mb-0">Sin inventario en stock todavía. Importa un lote para ver el streaming plan.</p>
+      <?php endif ?>
+    </div>
+  </div>
+
   <div class="row g-3">
     <div class="col-md-6">
       <div class="card shadow-sm h-100">
@@ -245,4 +367,72 @@ include __DIR__ . '/includes/sidebar.php';
     </div>
   </div>
 </div>
+<!-- Modal: Goal Config -->
+<div class="modal fade" id="modalGoal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+  <div class="modal-dialog">
+    <div class="modal-content bg-dark text-white">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title"><i class="bi bi-gear me-2"></i>Configurar meta & streaming</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">Meta de ventas USD</label>
+          <div class="input-group">
+            <span class="input-group-text bg-dark text-white border-secondary">$</span>
+            <input type="number" id="gGoal" class="form-control bg-dark text-white border-secondary" step="1000" min="0" value="<?= number_format($goal, 0, '.', '') ?>">
+          </div>
+        </div>
+        <div class="row g-3">
+          <div class="col-6">
+            <label class="form-label">Fecha inicio</label>
+            <input type="date" id="gStart" class="form-control bg-dark text-white border-secondary" value="<?= htmlspecialchars($cfg['goal_start_date'] ?? '') ?>">
+          </div>
+          <div class="col-6">
+            <label class="form-label">Fecha fin</label>
+            <input type="date" id="gEnd" class="form-control bg-dark text-white border-secondary" value="<?= htmlspecialchars($cfg['goal_end_date'] ?? '') ?>">
+          </div>
+        </div>
+        <div class="mt-3">
+          <label class="form-label">Tarifa streamer (USD/hora)</label>
+          <div class="input-group">
+            <span class="input-group-text bg-dark text-white border-secondary">$</span>
+            <input type="number" id="gRate" class="form-control bg-dark text-white border-secondary" step="5" min="0" value="<?= number_format($streamer_hourly, 0, '.', '') ?>">
+            <span class="input-group-text bg-dark text-white border-secondary">/hr</span>
+          </div>
+        </div>
+        <div id="goalError" class="alert alert-danger py-2 mt-3 d-none"></div>
+      </div>
+      <div class="modal-footer border-secondary">
+        <button class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button class="btn fw-bold" style="background:#d4537e;color:#fff" onclick="saveGoal()">Guardar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function openGoalConfig() {
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('modalGoal')).show();
+}
+function saveGoal() {
+    var payload = {
+        goal_amount_usd:    document.getElementById('gGoal').value,
+        goal_start_date:    document.getElementById('gStart').value,
+        goal_end_date:      document.getElementById('gEnd').value,
+        streamer_hourly_usd: document.getElementById('gRate').value,
+    };
+    apiFetch('?action=save_goal', { body: payload }).then(function(d) {
+        if (!d.ok) {
+            document.getElementById('goalError').textContent = d.error;
+            document.getElementById('goalError').classList.remove('d-none');
+            return;
+        }
+        bootstrap.Modal.getOrCreateInstance(document.getElementById('modalGoal')).hide();
+        toast('Meta actualizada. Recargando…');
+        setTimeout(function() { location.reload(); }, 1000);
+    });
+}
+</script>
+
 <?php include __DIR__ . '/includes/footer.php'; ?>

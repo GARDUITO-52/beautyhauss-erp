@@ -116,7 +116,7 @@ include __DIR__ . '/includes/sidebar.php';
 </div>
 
 <!-- Modal: Create / Edit -->
-<div class="modal fade" id="modalForm" tabindex="-1">
+<div class="modal fade" id="modalForm" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
   <div class="modal-dialog">
     <div class="modal-content bg-dark text-white">
       <div class="modal-header border-secondary">
@@ -158,7 +158,7 @@ include __DIR__ . '/includes/sidebar.php';
 </div>
 
 <!-- Modal: Delete confirm -->
-<div class="modal fade" id="modalDelete" tabindex="-1">
+<div class="modal fade" id="modalDelete" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
   <div class="modal-dialog modal-sm">
     <div class="modal-content bg-dark text-white">
       <div class="modal-body text-center py-4">
