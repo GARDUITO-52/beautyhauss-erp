@@ -1,0 +1,1 @@
+// beautyhauss ERP — global JS

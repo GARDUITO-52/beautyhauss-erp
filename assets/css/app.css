@@ -1,0 +1,11 @@
+body { background: #f8f9fa; }
+.sidebar { position: sticky; top: 0; }
+.main-content { flex: 1; padding: 2rem; min-width: 0; }
+.sidebar .nav-link:hover { background: rgba(255,255,255,.1); }
+.sidebar .nav-link.active { background: #d4537e; }
+.kpi-card { border-radius: 12px; border: none; }
+.kpi-card .card-body { padding: 1.5rem; }
+.kpi-value { font-size: 2rem; font-weight: 800; }
+.rescue-alert { background: #fff3cd; border-left: 4px solid #dc3545; }
+.rescue-critical { color: #dc3545; font-weight: 700; }
+.progress-goal { height: 20px; border-radius: 10px; }
