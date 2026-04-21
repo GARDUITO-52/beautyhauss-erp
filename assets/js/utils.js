@@ -29,13 +29,25 @@ function toast(msg, type) {
     c.appendChild(t);
     setTimeout(function() { t.remove(); }, 4000);
 }
-function apiFetch(url, opts) {
+function apiFetch(url, opts, _retry) {
     opts = opts || {};
+    var isFormData = opts.body instanceof FormData;
+    var rawBody = opts.body;
     opts.headers = Object.assign({ 'X-CSRF-Token': window.CSRF_TOKEN || '' }, opts.headers || {});
-    if (opts.body && typeof opts.body === 'object' && !(opts.body instanceof FormData)) {
+    if (rawBody && typeof rawBody === 'object' && !isFormData) {
         opts.headers['Content-Type'] = 'application/json';
-        opts.body = JSON.stringify(opts.body);
+        opts.body = JSON.stringify(rawBody);
         opts.method = opts.method || 'POST';
     }
-    return fetch(url, opts).then(function(r) { return r.json(); });
+    return fetch(url, opts).then(function(r) { return r.json(); }).then(function(d) {
+        if (d.csrf_error && !_retry) {
+            return fetch('/csrf_token.php').then(function(r) { return r.json(); }).then(function(t) {
+                window.CSRF_TOKEN = t.token;
+                var retryOpts = { method: opts.method, headers: {} };
+                if (rawBody) retryOpts.body = rawBody;
+                return apiFetch(url, retryOpts, true);
+            });
+        }
+        return d;
+    });
 }

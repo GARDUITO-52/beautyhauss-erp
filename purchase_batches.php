@@ -168,8 +168,11 @@ if (isset($_GET['action'])) {
                 if ((int)$exists->fetchColumn() > 0) { $skipped++; continue; }
 
                 $cost_usd = (float)$item['unit_cost_usd'];
-                // Rescue price USD: cost / (1 - Whatnot fees 10.9%) + $0.30 flat, min $1.00
-                $rescue   = max(1.00, round($cost_usd / (1 - 0.109) + 0.30, 2));
+                // Rescue price: break-even formula (cost + $0.30 flat) / (1 - 10.9% fees)
+                // Floor: $1.00 for cost < $1.00, $2.00 for cost >= $1.00
+                $rescue   = round(($cost_usd + 0.30) / (1 - 0.109), 2);
+                $floor    = $cost_usd >= 1.00 ? 2.00 : 1.00;
+                $rescue   = max($floor, $rescue);
                 $insert->execute([$item['id'], $item['brand'], $item['description'], $item['upc'], $item['color'], $item['size'], $item['packaging_type'], $cost_usd, $rescue, $item['qty']]);
                 $created++;
             }
@@ -210,6 +213,78 @@ if (isset($_GET['action'])) {
             'potential_rev' => $potential_rev,
             'goal'          => $goal_amt,
             'goal_pct'      => $goal_amt > 0 ? round($potential_rev / $goal_amt * 100, 1) : 0,
+        ]);
+    }
+
+    // ── Batch P&L ──
+    if ($action === 'batch_pnl') {
+        $id = (int)($_GET['id'] ?? 0);
+        if (!$id) jsonErr('batch_id requerido.');
+
+        $count = $pdo->prepare("SELECT COUNT(*) FROM products p JOIN purchase_batch_items bi ON bi.id = p.batch_item_id WHERE bi.batch_id = ?");
+        $count->execute([$id]);
+        if (!(int)$count->fetchColumn()) jsonOk(['has_products' => false]);
+
+        $rows = $pdo->prepare("
+            SELECT p.cost_usd, p.rescue_price_usd,
+                   SUM(p.stock_qty) AS units,
+                   SUM(p.stock_qty * p.rescue_price_usd) AS gross_revenue,
+                   SUM(p.stock_qty * p.cost_usd) AS cogs
+            FROM products p
+            JOIN purchase_batch_items bi ON bi.id = p.batch_item_id
+            WHERE bi.batch_id = ?
+            GROUP BY p.rescue_price_usd, p.cost_usd
+            ORDER BY p.cost_usd ASC
+        ");
+        $rows->execute([$id]);
+
+        $groups = [];
+        $t_units = $t_gross = $t_fees = $t_net = $t_cogs = $t_profit = 0;
+        foreach ($rows->fetchAll() as $row) {
+            $units  = (int)$row['units'];
+            $gross  = (float)$row['gross_revenue'];
+            $cogs   = (float)$row['cogs'];
+            $fees   = round($gross * 0.109 + $units * 0.30, 2);
+            $net    = round($gross - $fees, 2);
+            $profit = round($net - $cogs, 2);
+            $groups[] = [
+                'cost_usd'      => (float)$row['cost_usd'],
+                'rescue_price'  => (float)$row['rescue_price_usd'],
+                'units'         => $units,
+                'gross_revenue' => round($gross, 2),
+                'fees'          => $fees,
+                'net_seller'    => $net,
+                'cogs'          => round($cogs, 2),
+                'gross_profit'  => $profit,
+            ];
+            $t_units  += $units;
+            $t_gross  += $gross;
+            $t_fees   += $fees;
+            $t_net    += $net;
+            $t_cogs   += $cogs;
+            $t_profit += $profit;
+        }
+
+        $cfg = $pdo->query("SELECT config_key, config_value FROM system_config")->fetchAll(PDO::FETCH_KEY_PAIR);
+        $streamer_hourly = (float)($cfg['streamer_hourly_usd'] ?? 50);
+        $stream_hours    = round($t_units * 5 / 3600, 1);
+        $stream_cost     = round($stream_hours * $streamer_hourly, 2);
+
+        jsonOk([
+            'has_products' => true,
+            'groups'       => $groups,
+            'totals'       => [
+                'units'            => $t_units,
+                'gross_revenue'    => round($t_gross, 2),
+                'fees'             => round($t_fees, 2),
+                'net_seller'       => round($t_net, 2),
+                'cogs'             => round($t_cogs, 2),
+                'gross_profit'     => round($t_profit, 2),
+                'stream_hours'     => $stream_hours,
+                'stream_cost'      => $stream_cost,
+                'streamer_hourly'  => $streamer_hourly,
+                'net_profit'       => round($t_profit - $stream_cost, 2),
+            ],
         ]);
     }
 
@@ -476,10 +551,12 @@ function loadDetail(batchId) {
     document.getElementById('detailPanel').innerHTML = '<div class="card shadow-sm"><div class="card-body text-muted text-center py-4">Cargando…</div></div>';
     Promise.all([
         apiFetch('?action=get&id=' + batchId),
-        apiFetch('?action=items&id=' + batchId)
+        apiFetch('?action=items&id=' + batchId),
+        apiFetch('?action=batch_pnl&id=' + batchId)
     ]).then(function(results) {
         var batch = results[0].data, items = results[1].data;
         renderDetail(batch, items);
+        renderPnl(results[2]);
         loadBatches(); // refresh active state
     });
 }
@@ -718,6 +795,75 @@ function saveQuickSupplier() {
     });
 }
 
+// ── Batch P&L ──
+function renderPnl(pnl) {
+    if (!pnl || !pnl.ok) return;
+    var d = pnl.data;
+    var panel = document.getElementById('detailPanel');
+    if (!d.has_products) {
+        panel.insertAdjacentHTML('beforeend',
+            '<div class="card shadow-sm mt-3"><div class="card-body text-center text-muted py-3 small">'
+            + '<i class="bi bi-bar-chart me-1"></i>Genera productos para ver el análisis P&L'
+            + '</div></div>'
+        );
+        return;
+    }
+    var rows = d.groups.map(function(g) {
+        var hi = g.cost_usd >= 1.00;
+        return '<tr' + (hi ? ' style="border-top:2px solid #6c757d"' : '') + '>'
+            + '<td class="fw-semibold">' + fmt2(g.cost_usd) + '</td>'
+            + '<td class="text-warning fw-bold">' + fmt2(g.rescue_price) + '</td>'
+            + '<td class="text-end">' + fmtN(g.units) + '</td>'
+            + '<td class="text-end">' + fmt2(g.gross_revenue) + '</td>'
+            + '<td class="text-end text-danger">' + fmt2(g.fees) + '</td>'
+            + '<td class="text-end">' + fmt2(g.net_seller) + '</td>'
+            + '<td class="text-end text-warning">' + fmt2(g.cogs) + '</td>'
+            + '<td class="text-end fw-bold ' + (g.gross_profit >= 0 ? 'text-success' : 'text-danger') + '">' + fmt2(g.gross_profit) + '</td>'
+            + '</tr>';
+    }).join('');
+    var t = d.totals;
+    var nc = t.net_profit >= 0 ? 'text-success' : 'text-danger';
+    panel.insertAdjacentHTML('beforeend',
+        '<div class="card shadow-sm mt-3">'
+        + '<div class="card-header d-flex align-items-center gap-2">'
+        + '<i class="bi bi-bar-chart-fill text-info"></i>'
+        + '<span class="fw-bold">Análisis P&L — A precio rescue</span>'
+        + '<span class="badge bg-secondary ms-auto">' + fmtN(t.units) + ' uds</span>'
+        + '</div>'
+        + '<div class="card-body p-0"><div class="table-responsive">'
+        + '<table class="table table-sm table-hover mb-0">'
+        + '<thead class="table-dark"><tr>'
+        + '<th>Costo</th><th>Rescue</th><th class="text-end">Uds</th>'
+        + '<th class="text-end">Gross Whatnot</th><th class="text-end">Fees</th>'
+        + '<th class="text-end">Net Seller</th><th class="text-end">COGS</th>'
+        + '<th class="text-end">Profit</th>'
+        + '</tr></thead>'
+        + '<tbody>' + rows + '</tbody>'
+        + '<tfoot>'
+        + '<tr class="table-secondary fw-bold">'
+        + '<td colspan="2">TOTAL</td>'
+        + '<td class="text-end">' + fmtN(t.units) + '</td>'
+        + '<td class="text-end">' + fmt2(t.gross_revenue) + '</td>'
+        + '<td class="text-end text-danger">' + fmt2(t.fees) + '</td>'
+        + '<td class="text-end">' + fmt2(t.net_seller) + '</td>'
+        + '<td class="text-end text-warning">' + fmt2(t.cogs) + '</td>'
+        + '<td class="text-end text-success">' + fmt2(t.gross_profit) + '</td>'
+        + '</tr>'
+        + '<tr class="table-dark text-muted small">'
+        + '<td colspan="7" class="text-end">Costo streamer (' + t.stream_hours + 'h × ' + fmt2(t.streamer_hourly) + '/hr)</td>'
+        + '<td class="text-end text-danger fw-bold">' + fmt2(-t.stream_cost) + '</td>'
+        + '</tr>'
+        + '<tr class="table-dark">'
+        + '<td colspan="7" class="text-end fw-bold">NET PROFIT</td>'
+        + '<td class="text-end fw-bold fs-6 ' + nc + '">' + fmt2(t.net_profit) + '</td>'
+        + '</tr>'
+        + '</tfoot>'
+        + '</table>'
+        + '</div></div>'
+        + '</div>'
+    );
+}
+
 // ── Generate Products ──
 function generateProducts(batchId) {
     if (!confirm('¿Generar productos en el catálogo para este lote?\nSe calcularán costos y precios rescue automáticamente.')) return;
@@ -740,11 +886,11 @@ function generateProducts(batchId) {
             + '<div class="col-3"><div class="fw-bold">' + r.stream_hours + 'h</div><div class="text-muted" style="font-size:.75rem">de stream</div></div>'
             + '<div class="col-3"><div class="fw-bold">' + shows2h + '/' + shows3h + '</div><div class="text-muted" style="font-size:.75rem">shows 2h/3h</div></div>'
             + '</div>'
-            + '<div class="d-flex justify-content-between small mb-1"><span class="text-muted">Costo streamer ($' + fmt2(r.stream_cost / r.stream_hours) + '/hr)</span><span class="text-danger fw-bold">$' + fmt2(r.stream_cost) + '</span></div>'
+            + '<div class="d-flex justify-content-between small mb-1"><span class="text-muted">Costo streamer (' + fmt2(r.stream_cost / r.stream_hours) + '/hr)</span><span class="text-danger fw-bold">' + fmt2(r.stream_cost) + '</span></div>'
             + '<hr class="border-secondary my-2">'
             + '<div class="fw-semibold mb-2 small" style="color:#d4537e"><i class="bi bi-bullseye me-1"></i>Contribución a meta $' + fmtN(r.goal) + '</div>'
-            + '<div class="d-flex justify-content-between small mb-1"><span class="text-muted">Precio rescue promedio</span><span class="fw-bold">$' + fmt2(r.avg_rescue) + '</span></div>'
-            + '<div class="d-flex justify-content-between small mb-2"><span class="text-muted">Revenue potencial de este lote</span><span class="fw-bold text-success">$' + fmt2(r.potential_rev) + '</span></div>'
+            + '<div class="d-flex justify-content-between small mb-1"><span class="text-muted">Precio rescue promedio</span><span class="fw-bold">' + fmt2(r.avg_rescue) + '</span></div>'
+            + '<div class="d-flex justify-content-between small mb-2"><span class="text-muted">Revenue potencial de este lote</span><span class="fw-bold text-success">' + fmt2(r.potential_rev) + '</span></div>'
             + '<div class="progress mb-1" style="height:8px"><div class="progress-bar bg-success" style="width:' + goalBar + '%"></div></div>'
             + '<div class="text-muted text-end" style="font-size:.72rem">' + r.goal_pct + '% de la meta</div>'
             + '</div></div>';
