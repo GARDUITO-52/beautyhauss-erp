@@ -240,6 +240,11 @@ if (isset($_GET['action'])) {
         ");
         $rows->execute([$id]);
 
+        $cfg             = $pdo->query("SELECT config_key, config_value FROM system_config")->fetchAll(PDO::FETCH_KEY_PAIR);
+        $streamer_hourly = (float)($cfg['streamer_hourly_usd'] ?? 50);
+        $wn_pct          = (float)($cfg['whatnot_pct_fee'] ?? 0.109);
+        $wn_flat         = (float)($cfg['whatnot_flat_fee'] ?? 0.30);
+
         $groups = [];
         $t_units = $t_gross = $t_fees = $t_net = $t_cogs = $t_profit = 0;
         foreach ($rows->fetchAll() as $row) {
