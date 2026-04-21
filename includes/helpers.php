@@ -29,6 +29,11 @@ function logActivity(PDO $pdo, string $module, string $action, $record_id = null
     }
 }
 
+function fmtHhMm(float $h): string {
+    $m = (int)round($h * 60);
+    return sprintf('%d:%02d', intdiv($m, 60), $m % 60);
+}
+
 function jsonOk(mixed $data = null): void {
     header('Content-Type: application/json');
     echo json_encode(['ok' => true, 'data' => $data]);

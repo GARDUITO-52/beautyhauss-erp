@@ -255,7 +255,7 @@ include __DIR__ . '/includes/sidebar.php';
           </div>
           <div class="d-flex justify-content-between mb-1">
             <span class="text-muted small">Horas de stream total</span>
-            <span class="fw-bold"><?= $stream_hours ?>h</span>
+            <span class="fw-bold"><?= fmtHhMm($stream_hours) ?></span>
           </div>
           <div class="d-flex justify-content-between mb-1">
             <span class="text-muted small">Prods/show (<?= $show_duration ?>h)</span>
@@ -286,7 +286,7 @@ include __DIR__ . '/includes/sidebar.php';
           </div>
           <div class="d-flex justify-content-between mb-1">
             <span class="text-muted small">Horas totales necesarias</span>
-            <span class="fw-bold"><?= $hours_for_goal ?>h</span>
+            <span class="fw-bold"><?= fmtHhMm($hours_for_goal) ?></span>
           </div>
           <div class="d-flex justify-content-between mb-1">
             <span class="text-muted small">Costo streamer (@$<?= number_format($streamer_hourly, 0) ?>/hr)</span>
