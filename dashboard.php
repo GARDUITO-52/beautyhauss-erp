@@ -117,21 +117,20 @@ $sell_through = $total_units > 0 ? ($sold_units / $total_units * 100) : 0;
 
 $inv = $pdo->query("SELECT COUNT(*) AS skus, COALESCE(SUM(stock_qty),0) AS units FROM products WHERE stock_qty > 0")->fetch();
 $stream_hours  = round($inv['units'] * 5 / 3600, 1);
-$stream_shows2 = $inv['units'] > 0 ? (int)ceil($stream_hours / 2) : 0;
-$stream_shows3 = $inv['units'] > 0 ? (int)ceil($stream_hours / 3) : 0;
 
 // Goal-aware streaming math
-$streamer_hourly = (float)($cfg['streamer_hourly_usd'] ?? 50);
-$avg_unit_price  = $sold_units > 0
+$streamer_hourly  = (float)($cfg['streamer_hourly_usd'] ?? 50);
+$avg_unit_price   = $sold_units > 0
     ? $revenue / $sold_units
     : (float)$pdo->query("SELECT COALESCE(AVG(rescue_price_usd),0) FROM products WHERE rescue_price_usd > 0")->fetchColumn();
-$remaining_goal  = max(0, $goal - $revenue);
-$units_for_goal  = $avg_unit_price > 0 ? (int)ceil($remaining_goal / $avg_unit_price) : 0;
-$hours_for_goal  = round($units_for_goal * 5 / 3600, 1);
-$streamer_cost   = round($hours_for_goal * $streamer_hourly, 2);
-$shows_goal_2h   = $units_for_goal > 0 ? (int)ceil($hours_for_goal / 2) : 0;
-// Shabbat: Fri 6pm–Sat 9pm = 27h blocked. Assuming 2h shows, available slots/week ≈ floor(141/2)=70 max
-// Practical cadences: 3, 5, 7 shows/week
+$remaining_goal   = max(0, $goal - $revenue);
+$units_for_goal   = $avg_unit_price > 0 ? (int)ceil($remaining_goal / $avg_unit_price) : 0;
+$hours_for_goal   = round($units_for_goal * 5 / 3600, 1);
+$streamer_cost    = round($hours_for_goal * $streamer_hourly, 2);
+$hrs_per_day      = $days_left > 0 && $hours_for_goal > 0 ? round($hours_for_goal / $days_left, 1) : 0;
+$active_hosts     = (int)$pdo->query("SELECT COUNT(*) FROM hosts WHERE is_active=1")->fetchColumn();
+$hrs_per_host_day = $active_hosts > 0 && $hrs_per_day > 0 ? round($hrs_per_day / $active_hosts, 1) : 0;
+$shows_goal_2h    = $units_for_goal > 0 ? (int)ceil($hours_for_goal / 2) : 0;
 $weeks_3 = $shows_goal_2h > 0 ? (int)ceil($shows_goal_2h / 3) : 0;
 $weeks_5 = $shows_goal_2h > 0 ? (int)ceil($shows_goal_2h / 5) : 0;
 $weeks_7 = $shows_goal_2h > 0 ? (int)ceil($shows_goal_2h / 7) : 0;
@@ -253,15 +252,21 @@ include __DIR__ . '/includes/sidebar.php';
             <span class="fw-bold text-info"><?= number_format($inv['units']) ?></span>
           </div>
           <div class="d-flex justify-content-between mb-1">
-            <span class="text-muted small">Horas de stream</span>
+            <span class="text-muted small">Horas de stream total</span>
             <span class="fw-bold"><?= $stream_hours ?>h</span>
           </div>
-          <div class="d-flex justify-content-between">
-            <span class="text-muted small">Shows de 2h / 3h</span>
-            <span class="fw-bold"><?= $stream_shows2 ?> / <?= $stream_shows3 ?></span>
+          <!-- Show calculator -->
+          <div class="mt-3 p-2 rounded" style="background:rgba(255,255,255,.05)">
+            <div class="text-muted small fw-semibold mb-2">Calculadora de show</div>
+            <div class="input-group input-group-sm">
+              <input type="number" id="showDurInput" class="form-control bg-dark text-white border-secondary"
+                     placeholder="Duración (hrs)" min="0.5" step="0.5" value="3" oninput="calcShow()">
+              <span class="input-group-text bg-dark text-secondary border-secondary">hrs</span>
+            </div>
+            <div class="mt-1 text-muted small">→ <span id="showCalcOut" class="fw-bold text-white">2,160</span> productos</div>
           </div>
         </div>
-        <!-- Meta -->
+        <!-- Meta + hrs/día -->
         <div class="col-md-4 border-start border-secondary">
           <div class="small text-muted text-uppercase fw-semibold mb-2">Para meta $<?= number_format($goal, 0) ?></div>
           <?php if ($avg_unit_price > 0): ?>
@@ -274,13 +279,28 @@ include __DIR__ . '/includes/sidebar.php';
             <span class="fw-bold text-success"><?= number_format($units_for_goal) ?></span>
           </div>
           <div class="d-flex justify-content-between mb-1">
-            <span class="text-muted small">Horas de stream</span>
+            <span class="text-muted small">Horas totales necesarias</span>
             <span class="fw-bold"><?= $hours_for_goal ?>h</span>
           </div>
-          <div class="d-flex justify-content-between">
+          <div class="d-flex justify-content-between mb-1">
             <span class="text-muted small">Costo streamer (@$<?= number_format($streamer_hourly, 0) ?>/hr)</span>
             <span class="fw-bold text-danger">$<?= number_format($streamer_cost, 0) ?></span>
           </div>
+          <?php if ($hrs_per_day > 0): ?>
+          <hr class="border-secondary my-2">
+          <div class="d-flex justify-content-between mb-1">
+            <span class="text-muted small fw-semibold">Hrs/día necesarias</span>
+            <span class="fw-bold fs-6" style="color:#d4537e"><?= $hrs_per_day ?>h/día</span>
+          </div>
+          <?php if ($active_hosts > 0): ?>
+          <div class="d-flex justify-content-between">
+            <span class="text-muted small"><?= $active_hosts ?> host<?= $active_hosts > 1 ? 's' : '' ?> activ<?= $active_hosts > 1 ? 'as' : 'a' ?></span>
+            <span class="fw-bold text-info"><?= $hrs_per_host_day ?>h/host/día</span>
+          </div>
+          <?php else: ?>
+          <div class="text-muted" style="font-size:.72rem">Agrega hosts para ver desglose por streamer</div>
+          <?php endif ?>
+          <?php endif ?>
           <?php else: ?>
           <p class="text-muted small mb-0">Genera productos para calcular precio promedio.</p>
           <?php endif ?>
@@ -430,6 +450,13 @@ include __DIR__ . '/includes/sidebar.php';
 </div>
 
 <script>
+function calcShow() {
+    var hrs = parseFloat(document.getElementById('showDurInput').value) || 0;
+    var prods = Math.floor(hrs * 3600 / 5);
+    document.getElementById('showCalcOut').textContent = prods.toLocaleString();
+}
+document.addEventListener('DOMContentLoaded', calcShow);
+
 function openGoalConfig() {
     bootstrap.Modal.getOrCreateInstance(document.getElementById('modalGoal')).show();
 }
