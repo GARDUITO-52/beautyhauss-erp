@@ -5,6 +5,48 @@ require_login();
 
 $is_admin = current_user()['role'] === 'admin';
 
+// ── CSV DOWNLOADS (bypass JSON header) ────────────────────────────────────
+if (isset($_GET['action']) && in_array($_GET['action'], ['export_pre_show', 'download_template'])) {
+    require_admin();
+    $show_id = (int)($_GET['show_id'] ?? 0);
+    if (!$show_id) { http_response_code(400); echo 'show_id requerido.'; exit; }
+
+    if ($_GET['action'] === 'export_pre_show') {
+        $rows = $pdo->prepare("
+            SELECT sp.whatnot_slot, p.sku_internal, p.brand, p.description,
+                   p.color, p.size, sp.qty_listed, p.rescue_price_usd
+            FROM show_products sp JOIN products p ON p.id = sp.product_id
+            WHERE sp.show_id = ? ORDER BY sp.whatnot_slot, sp.id ASC");
+        $rows->execute([$show_id]);
+        $items = $rows->fetchAll();
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="show-' . $show_id . '-lineup.csv"');
+        $out = fopen('php://output', 'w');
+        fputcsv($out, ['slot','sku_internal','brand','description','color','size','qty_listed','rescue_price_usd']);
+        foreach ($items as $r) {
+            fputcsv($out, [$r['whatnot_slot'] ?? '', $r['sku_internal'] ?? '', $r['brand'], $r['description'],
+                           $r['color'] ?? '', $r['size'] ?? '', $r['qty_listed'], number_format((float)$r['rescue_price_usd'],2,'.','')]);
+        }
+        fclose($out); exit;
+    }
+
+    if ($_GET['action'] === 'download_template') {
+        $slots = $pdo->prepare("SELECT whatnot_slot FROM show_products WHERE show_id=? AND whatnot_slot IS NOT NULL ORDER BY whatnot_slot ASC");
+        $slots->execute([$show_id]);
+        $slots = $slots->fetchAll(PDO::FETCH_COLUMN);
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="show-' . $show_id . '-post-show-template.csv"');
+        $out = fopen('php://output', 'w');
+        fputcsv($out, ['slot','qty_sold','sale_price_usd']);
+        if ($slots) {
+            foreach ($slots as $s) fputcsv($out, [$s, '', '']);
+        } else {
+            fputcsv($out, ['001','','']); fputcsv($out, ['002','','']);
+        }
+        fclose($out); exit;
+    }
+}
+
 // ── AJAX ───────────────────────────────────────────────────────────────────
 if (isset($_GET['action'])) {
     header('Content-Type: application/json');
@@ -30,12 +72,24 @@ if (isset($_GET['action'])) {
         $show->execute([$show_id]); $show = $show->fetch();
         if (!$show) jsonErr('Show no encontrado.', 404);
         $items = $pdo->prepare("
-            SELECT sp.id, sp.qty_listed, sp.starting_bid_usd,
+            SELECT sp.id, sp.qty_listed, sp.starting_bid_usd, sp.whatnot_slot,
                    p.brand, p.description, p.upc, p.color, p.size, p.stock_qty
             FROM show_products sp JOIN products p ON p.id = sp.product_id
-            WHERE sp.show_id = ? ORDER BY sp.id ASC");
+            WHERE sp.show_id = ? ORDER BY sp.whatnot_slot ASC, sp.id ASC");
         $items->execute([$show_id]);
         jsonOk(['show' => $show, 'items' => $items->fetchAll()]);
+    }
+
+    if ($action === 'update_slot') {
+        require_admin(); csrfGuard();
+        $d       = json_decode(file_get_contents('php://input'), true) ?? [];
+        $sp_id   = (int)($d['id'] ?? 0);
+        $show_id = (int)($d['show_id'] ?? 0);
+        $slot    = trim($d['whatnot_slot'] ?? '');
+        if (!$sp_id || !$show_id) jsonErr('Datos inválidos.');
+        $pdo->prepare("UPDATE show_products SET whatnot_slot=? WHERE id=? AND show_id=?")
+            ->execute([$slot ?: null, $sp_id, $show_id]);
+        jsonOk();
     }
 
     if ($is_admin) {
@@ -246,14 +300,27 @@ function loadLineup(showId) {
 
 function renderLineup(show, items) {
     var adminEdit = IS_ADMIN
-        ? '<button class="btn btn-sm btn-outline-secondary ms-2" onclick="openEdit(' + show.id + ')"><i class="bi bi-pencil"></i></button>'
+        ? ' <button class="btn btn-sm btn-outline-secondary ms-2" onclick="openEdit(' + show.id + ')"><i class="bi bi-pencil"></i></button>'
         + ' <button class="btn btn-sm btn-outline-danger ms-1" onclick="deleteShow(' + show.id + ')"><i class="bi bi-trash"></i></button>'
         : '';
 
-    var rows = items.length ? items.map(function(item, i) {
+    var exportBtns = IS_ADMIN ? ''
+        + '<div class="d-flex gap-2 mt-2 mt-md-0">'
+        + '<a href="?action=export_pre_show&show_id=' + show.id + '" class="btn btn-sm btn-outline-success" title="CSV para Daniel">'
+        + '<i class="bi bi-download me-1"></i>Para Daniel</a>'
+        + '<a href="?action=download_template&show_id=' + show.id + '" class="btn btn-sm btn-outline-secondary" title="Template post-show">'
+        + '<i class="bi bi-file-earmark-arrow-down me-1"></i>Template post-show</a>'
+        + '</div>' : '';
+
+    var rows = items.length ? items.map(function(item) {
+        var slotCell = IS_ADMIN
+            ? '<td><span class="badge bg-secondary font-monospace slot-badge" style="cursor:pointer;min-width:2.5rem" '
+              + 'onclick="editSlot(this,' + item.id + ',' + show.id + ')" title="Click para editar slot">'
+              + esc(item.whatnot_slot || '—') + '</span></td>'
+            : '<td class="font-monospace text-muted small">' + esc(item.whatnot_slot || '—') + '</td>';
         var bidCell = IS_ADMIN ? '<td class="text-warning">$' + fmt2(item.starting_bid_usd) + '</td>' : '';
         return '<tr>'
-            + '<td class="text-muted">' + (i+1) + '</td>'
+            + slotCell
             + '<td class="fw-semibold">' + esc(item.brand || '—') + '</td>'
             + '<td>' + esc(item.description) + '</td>'
             + '<td class="font-monospace small">' + esc(item.upc || '—') + '</td>'
@@ -262,27 +329,57 @@ function renderLineup(show, items) {
             + '<td class="fw-bold">' + item.qty_listed + '</td>'
             + bidCell
             + '</tr>';
-    }).join('') : '<tr><td colspan="8" class="text-center text-muted py-3">Sin productos en el lineup.</td></tr>';
+    }).join('') : '<tr><td colspan="9" class="text-center text-muted py-3">Sin productos en el lineup.</td></tr>';
 
     var bidHeader = IS_ADMIN ? '<th>Bid Inicial</th>' : '';
 
     document.getElementById('lineupPanel').innerHTML = ''
         + '<div class="card shadow-sm">'
-        + '<div class="card-header d-flex justify-content-between align-items-start">'
+        + '<div class="card-header d-flex flex-wrap justify-content-between align-items-start gap-2">'
         + '<div>'
         + '<div class="fw-bold fs-5">' + esc(show.title) + adminEdit + '</div>'
         + '<div class="text-muted small">' + formatDate(show.scheduled_at) + (show.host ? ' · ' + esc(show.host) : '') + '</div>'
         + '</div>'
+        + '<div class="d-flex flex-column align-items-end gap-1">'
         + '<span class="badge bg-' + STATUS_COLORS[show.status] + '">' + STATUS_LABELS[show.status] + '</span>'
+        + exportBtns
+        + '</div>'
         + '</div>'
         + '<div class="card-body p-0">'
         + '<table class="table table-sm mb-0">'
-        + '<thead class="table-dark"><tr><th>#</th><th>Marca</th><th>Descripción</th><th>UPC</th><th>Color</th><th>Talla</th><th>Qty</th>' + bidHeader + '</tr></thead>'
+        + '<thead class="table-dark"><tr><th>Slot</th><th>Marca</th><th>Descripción</th><th>UPC</th><th>Color</th><th>Talla</th><th>Qty</th>' + bidHeader + '</tr></thead>'
         + '<tbody>' + rows + '</tbody>'
         + '</table>'
         + '</div>'
-        + (items.length ? '<div class="card-footer text-muted small">' + items.length + ' productos · ' + items.reduce(function(a,b){return a+b.qty_listed;},0) + ' unidades totales</div>' : '')
+        + (items.length ? '<div class="card-footer text-muted small">' + items.length + ' productos · ' + items.reduce(function(a,b){return a+parseInt(b.qty_listed);},0) + ' unidades · <span class="text-info">Click en slot para editar</span></div>' : '')
         + '</div>';
+}
+
+function editSlot(el, spId, showId) {
+    var current = el.textContent.trim() === '—' ? '' : el.textContent.trim();
+    var input = document.createElement('input');
+    input.type = 'text'; input.value = current;
+    input.className = 'form-control form-control-sm font-monospace p-0 text-center';
+    input.style.cssText = 'width:4rem;display:inline-block';
+    input.maxLength = 10;
+    el.replaceWith(input);
+    input.focus(); input.select();
+    function save() {
+        var val = input.value.trim();
+        apiFetch('?action=update_slot', { body: { id: spId, show_id: showId, whatnot_slot: val } }).then(function(d) {
+            var badge = document.createElement('span');
+            badge.className = 'badge bg-' + (val ? 'primary' : 'secondary') + ' font-monospace slot-badge';
+            badge.style.cssText = 'cursor:pointer;min-width:2.5rem';
+            badge.title = 'Click para editar slot';
+            badge.textContent = val || '—';
+            badge.onclick = function() { editSlot(badge, spId, showId); };
+            input.replaceWith(badge);
+            if (d.ok) toast('Slot actualizado.');
+            else toast(d.error, 'error');
+        });
+    }
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } if (e.key === 'Escape') { input.value = current; input.blur(); } });
 }
 
 function formatDate(dt) {
