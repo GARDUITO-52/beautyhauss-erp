@@ -487,6 +487,8 @@ var _batchModal = null, _csvModal = null, _qsModal = null;
 var _activeBatch = null;
 var _csvHeaders  = [], _csvRows = [];
 var _csvBatchId  = null;
+var _batchItems  = [];
+var _sortCol     = null, _sortDir = 1;
 
 var FIELDS = [
   { value: '', label: '— Ignorar —' },
@@ -565,11 +567,35 @@ function loadDetail(batchId) {
     });
 }
 
-function renderDetail(b, items) {
-    var totalUnits = items.reduce(function(a,i){return a+parseInt(i.qty);},0);
-    var totalCost  = items.reduce(function(a,i){return a+(parseFloat(i.qty)*parseFloat(i.unit_cost_usd));},0);
+function sortIcon(col) {
+    if (_sortCol !== col) return '<i class="bi bi-arrow-down-up text-muted ms-1" style="font-size:.7rem"></i>';
+    return _sortDir === -1
+        ? '<i class="bi bi-sort-down text-warning ms-1" style="font-size:.7rem"></i>'
+        : '<i class="bi bi-sort-up text-warning ms-1" style="font-size:.7rem"></i>';
+}
 
-    var rows = items.length ? items.map(function(item) {
+function sortItems(col) {
+    if (_sortCol === col) { _sortDir *= -1; }
+    else { _sortCol = col; _sortDir = -1; }
+    var sorted = _batchItems.slice().sort(function(a, b) {
+        var va = col === 'total' ? parseFloat(a.qty) * parseFloat(a.unit_cost_usd)
+               : col === 'qty'  ? parseInt(a.qty)
+               : parseFloat(a.unit_cost_usd);
+        var vb = col === 'total' ? parseFloat(b.qty) * parseFloat(b.unit_cost_usd)
+               : col === 'qty'  ? parseInt(b.qty)
+               : parseFloat(b.unit_cost_usd);
+        return (va - vb) * _sortDir;
+    });
+    var tbody = document.querySelector('#itemsTable tbody');
+    var tfoot = document.querySelector('#itemsTable tfoot');
+    if (tbody) tbody.innerHTML = renderItemRows(sorted);
+    document.querySelectorAll('#itemsTable thead th[data-sort]').forEach(function(th) {
+        th.querySelector('.sort-icon').innerHTML = sortIcon(th.dataset.sort);
+    });
+}
+
+function renderItemRows(items) {
+    return items.length ? items.map(function(item) {
         return '<tr>'
             + '<td class="text-muted small">' + esc(item.supplier_product_id||'—') + '</td>'
             + '<td class="fw-semibold">' + esc(item.brand||'—') + '</td>'
@@ -582,6 +608,18 @@ function renderDetail(b, items) {
             + '<td>' + fmt2(parseFloat(item.qty)*parseFloat(item.unit_cost_usd)) + '</td>'
             + '</tr>';
     }).join('') : '<tr><td colspan="9" class="text-center text-muted py-3">Sin ítems. Importa un CSV.</td></tr>';
+}
+
+function renderDetail(b, items) {
+    _batchItems = items;
+    _sortCol = null; _sortDir = -1;
+    var totalUnits = items.reduce(function(a,i){return a+parseInt(i.qty);},0);
+    var totalCost  = items.reduce(function(a,i){return a+(parseFloat(i.qty)*parseFloat(i.unit_cost_usd));},0);
+
+    function sh(col, label) {
+        return '<th data-sort="' + col + '" onclick="sortItems(\'' + col + '\')" style="cursor:pointer;white-space:nowrap">'
+            + label + '<span class="sort-icon">' + sortIcon(col) + '</span></th>';
+    }
 
     document.getElementById('detailPanel').innerHTML = ''
         + '<div class="card shadow-sm mb-3">'
@@ -607,9 +645,11 @@ function renderDetail(b, items) {
         + '</div>'
         + '<div class="card shadow-sm">'
         + '<div class="card-body p-0">'
-        + '<table class="table table-sm table-hover mb-0">'
-        + '<thead class="table-dark"><tr><th>ID Prov.</th><th>Marca</th><th>Descripción</th><th>UPC</th><th>Color</th><th>Talla</th><th>Qty</th><th>Costo u.</th><th>Total</th></tr></thead>'
-        + '<tbody>' + rows + '</tbody>'
+        + '<table id="itemsTable" class="table table-sm table-hover mb-0">'
+        + '<thead class="table-dark"><tr><th>ID Prov.</th><th>Marca</th><th>Descripción</th><th>UPC</th><th>Color</th><th>Talla</th>'
+        + sh('qty','Qty') + sh('unit_cost_usd','Costo u.') + sh('total','Total')
+        + '</tr></thead>'
+        + '<tbody>' + renderItemRows(items) + '</tbody>'
         + (items.length ? '<tfoot class="table-secondary"><tr><td colspan="6" class="text-end fw-bold">Total</td><td class="fw-bold">' + fmtN(totalUnits) + '</td><td></td><td class="fw-bold text-warning">' + fmt2(totalCost) + '</td></tr></tfoot>' : '')
         + '</table>'
         + '</div>'
