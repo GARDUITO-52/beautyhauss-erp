@@ -15,7 +15,7 @@ if (isset($_GET['action'])) {
     if ($_GET['action'] === 'save_goal') {
         csrfGuard();
         $d = json_decode(file_get_contents('php://input'), true) ?? [];
-        $keys = ['goal_amount_usd', 'goal_start_date', 'goal_end_date', 'streamer_hourly_usd', 'whatnot_pct_fee', 'whatnot_flat_fee'];
+        $keys = ['goal_amount_usd', 'goal_start_date', 'goal_end_date', 'streamer_hourly_usd', 'whatnot_pct_fee', 'whatnot_flat_fee', 'show_duration_hrs', 'daily_stream_hrs'];
         $stmt = $pdo->prepare("INSERT INTO system_config (config_key, config_value) VALUES (?,?) ON DUPLICATE KEY UPDATE config_value=?");
         foreach ($keys as $k) {
             if (isset($d[$k]) && $d[$k] !== '') $stmt->execute([$k, $d[$k], $d[$k]]);
@@ -120,6 +120,8 @@ $stream_hours  = round($inv['units'] * 5 / 3600, 1);
 
 // Goal-aware streaming math
 $streamer_hourly  = (float)($cfg['streamer_hourly_usd'] ?? 50);
+$show_duration    = (float)($cfg['show_duration_hrs']   ?? 4);
+$daily_hrs        = (float)($cfg['daily_stream_hrs']    ?? 12);
 $avg_unit_price   = $sold_units > 0
     ? $revenue / $sold_units
     : (float)$pdo->query("SELECT COALESCE(AVG(rescue_price_usd),0) FROM products WHERE rescue_price_usd > 0")->fetchColumn();
@@ -130,10 +132,10 @@ $streamer_cost    = round($hours_for_goal * $streamer_hourly, 2);
 $hrs_per_day      = $days_left > 0 && $hours_for_goal > 0 ? round($hours_for_goal / $days_left, 1) : 0;
 $active_hosts     = (int)$pdo->query("SELECT COUNT(*) FROM hosts WHERE is_active=1")->fetchColumn();
 $hrs_per_host_day = $active_hosts > 0 && $hrs_per_day > 0 ? round($hrs_per_day / $active_hosts, 1) : 0;
-$shows_goal_2h    = $units_for_goal > 0 ? (int)ceil($hours_for_goal / 2) : 0;
-$weeks_3 = $shows_goal_2h > 0 ? (int)ceil($shows_goal_2h / 3) : 0;
-$weeks_5 = $shows_goal_2h > 0 ? (int)ceil($shows_goal_2h / 5) : 0;
-$weeks_7 = $shows_goal_2h > 0 ? (int)ceil($shows_goal_2h / 7) : 0;
+$shows_per_day    = $show_duration > 0 ? (int)floor($daily_hrs / $show_duration) : 0;
+$prods_per_show   = (int)round($show_duration * 3600 / 5);
+$days_needed      = $daily_hrs > 0 && $hours_for_goal > 0 ? (int)ceil($hours_for_goal / $daily_hrs) : 0;
+$weeks_needed     = $days_needed > 0 ? round($days_needed / 6, 1) : 0;
 
 $progress_pct = $goal > 0 ? min(100, ($revenue / $goal * 100)) : 0;
 $pace_daily   = $days_passed > 0 ? $revenue / $days_passed : 0;
@@ -255,15 +257,19 @@ include __DIR__ . '/includes/sidebar.php';
             <span class="text-muted small">Horas de stream total</span>
             <span class="fw-bold"><?= $stream_hours ?>h</span>
           </div>
+          <div class="d-flex justify-content-between mb-1">
+            <span class="text-muted small">Prods/show (<?= $show_duration ?>h)</span>
+            <span class="fw-bold text-info"><?= number_format($prods_per_show) ?></span>
+          </div>
           <!-- Show calculator -->
           <div class="mt-3 p-2 rounded" style="background:rgba(255,255,255,.05)">
             <div class="text-muted small fw-semibold mb-2">Calculadora de show</div>
             <div class="input-group input-group-sm">
               <input type="number" id="showDurInput" class="form-control bg-dark text-white border-secondary"
-                     placeholder="Duración (hrs)" min="0.5" step="0.5" value="3" oninput="calcShow()">
+                     placeholder="Duración (hrs)" min="0.5" step="0.5" value="<?= $show_duration ?>" oninput="calcShow()">
               <span class="input-group-text bg-dark text-secondary border-secondary">hrs</span>
             </div>
-            <div class="mt-1 text-muted small">→ <span id="showCalcOut" class="fw-bold text-white">2,160</span> productos</div>
+            <div class="mt-1 text-muted small">→ <span id="showCalcOut" class="fw-bold" style="color:#d4537e">2,880</span> productos</div>
           </div>
         </div>
         <!-- Meta + hrs/día -->
@@ -308,20 +314,20 @@ include __DIR__ . '/includes/sidebar.php';
         <!-- Calendario Shabbat -->
         <div class="col-md-4 border-start border-secondary">
           <div class="small text-muted text-uppercase fw-semibold mb-2">Calendario <span class="badge bg-warning text-dark ms-1" style="font-size:.65rem">Shabbat off</span></div>
-          <?php if ($shows_goal_2h > 0): ?>
+          <?php if ($days_needed > 0): ?>
           <div class="d-flex justify-content-between mb-1">
-            <span class="text-muted small">3 shows/semana</span>
-            <span class="fw-bold"><?= $weeks_3 ?> semanas</span>
+            <span class="text-muted small">Shows/día (<?= $daily_hrs ?>h ÷ <?= $show_duration ?>h)</span>
+            <span class="fw-bold text-info"><?= $shows_per_day ?></span>
           </div>
           <div class="d-flex justify-content-between mb-1">
-            <span class="text-muted small">5 shows/semana</span>
-            <span class="fw-bold text-warning"><?= $weeks_5 ?> semanas</span>
+            <span class="text-muted small">Días necesarios</span>
+            <span class="fw-bold"><?= $days_needed ?> días</span>
           </div>
           <div class="d-flex justify-content-between mb-1">
-            <span class="text-muted small">7 shows/semana</span>
-            <span class="fw-bold text-success"><?= $weeks_7 ?> semanas</span>
+            <span class="text-muted small">Semanas (6 días/sem)</span>
+            <span class="fw-bold text-warning"><?= $weeks_needed ?> sem</span>
           </div>
-          <div class="text-muted mt-2" style="font-size:.7rem">Vie 6pm → Sáb 9pm bloqueado · Shows de 2h</div>
+          <div class="text-muted mt-2" style="font-size:.7rem">Vie 6pm → Sáb 9pm bloqueado · <?= $show_duration ?>h/show</div>
           <?php else: ?>
           <p class="text-muted small mb-0">Configura meta para ver proyección.</p>
           <?php endif ?>
@@ -439,6 +445,24 @@ include __DIR__ . '/includes/sidebar.php';
             </div>
           </div>
         </div>
+        <hr class="border-secondary mt-3 mb-2">
+        <div class="text-muted small mb-2">Operación</div>
+        <div class="row g-3">
+          <div class="col-6">
+            <label class="form-label">Duración show <span class="text-muted small">(hrs)</span></label>
+            <div class="input-group">
+              <input type="number" id="gShowDur" class="form-control bg-dark text-white border-secondary" step="0.5" min="0.5" value="<?= number_format($show_duration, 1, '.', '') ?>">
+              <span class="input-group-text bg-dark text-white border-secondary">hrs</span>
+            </div>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Hrs streaming/día</label>
+            <div class="input-group">
+              <input type="number" id="gDailyHrs" class="form-control bg-dark text-white border-secondary" step="1" min="1" value="<?= number_format($daily_hrs, 0, '.', '') ?>">
+              <span class="input-group-text bg-dark text-white border-secondary">hrs</span>
+            </div>
+          </div>
+        </div>
         <div id="goalError" class="alert alert-danger py-2 mt-3 d-none"></div>
       </div>
       <div class="modal-footer border-secondary">
@@ -468,6 +492,8 @@ function saveGoal() {
         streamer_hourly_usd: document.getElementById('gRate').value,
         whatnot_pct_fee:     (parseFloat(document.getElementById('gWnPct').value) / 100).toFixed(4),
         whatnot_flat_fee:    document.getElementById('gWnFlat').value,
+        show_duration_hrs:   document.getElementById('gShowDur').value,
+        daily_stream_hrs:    document.getElementById('gDailyHrs').value,
     };
     apiFetch('?action=save_goal', { body: payload }).then(function(d) {
         if (!d.ok) {
