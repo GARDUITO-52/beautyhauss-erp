@@ -15,7 +15,7 @@ if (isset($_GET['action'])) {
     if ($_GET['action'] === 'save_goal') {
         csrfGuard();
         $d = json_decode(file_get_contents('php://input'), true) ?? [];
-        $keys = ['goal_amount_usd', 'goal_start_date', 'goal_end_date', 'streamer_hourly_usd'];
+        $keys = ['goal_amount_usd', 'goal_start_date', 'goal_end_date', 'streamer_hourly_usd', 'whatnot_pct_fee', 'whatnot_flat_fee'];
         $stmt = $pdo->prepare("INSERT INTO system_config (config_key, config_value) VALUES (?,?) ON DUPLICATE KEY UPDATE config_value=?");
         foreach ($keys as $k) {
             if (isset($d[$k]) && $d[$k] !== '') $stmt->execute([$k, $d[$k], $d[$k]]);
@@ -401,6 +401,24 @@ include __DIR__ . '/includes/sidebar.php';
             <span class="input-group-text bg-dark text-white border-secondary">/hr</span>
           </div>
         </div>
+        <hr class="border-secondary mt-3 mb-2">
+        <div class="text-muted small mb-2">Fees Whatnot</div>
+        <div class="row g-3">
+          <div class="col-6">
+            <label class="form-label">Comisión % <span class="text-muted small">(ej. 10.9)</span></label>
+            <div class="input-group">
+              <input type="number" id="gWnPct" class="form-control bg-dark text-white border-secondary" step="0.1" min="0" max="50" value="<?= number_format((float)($cfg['whatnot_pct_fee'] ?? 0.109) * 100, 1, '.', '') ?>">
+              <span class="input-group-text bg-dark text-white border-secondary">%</span>
+            </div>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Fee fijo <span class="text-muted small">(por venta)</span></label>
+            <div class="input-group">
+              <span class="input-group-text bg-dark text-white border-secondary">$</span>
+              <input type="number" id="gWnFlat" class="form-control bg-dark text-white border-secondary" step="0.01" min="0" value="<?= number_format((float)($cfg['whatnot_flat_fee'] ?? 0.30), 2, '.', '') ?>">
+            </div>
+          </div>
+        </div>
         <div id="goalError" class="alert alert-danger py-2 mt-3 d-none"></div>
       </div>
       <div class="modal-footer border-secondary">
@@ -417,10 +435,12 @@ function openGoalConfig() {
 }
 function saveGoal() {
     var payload = {
-        goal_amount_usd:    document.getElementById('gGoal').value,
-        goal_start_date:    document.getElementById('gStart').value,
-        goal_end_date:      document.getElementById('gEnd').value,
+        goal_amount_usd:     document.getElementById('gGoal').value,
+        goal_start_date:     document.getElementById('gStart').value,
+        goal_end_date:       document.getElementById('gEnd').value,
         streamer_hourly_usd: document.getElementById('gRate').value,
+        whatnot_pct_fee:     (parseFloat(document.getElementById('gWnPct').value) / 100).toFixed(4),
+        whatnot_flat_fee:    document.getElementById('gWnFlat').value,
     };
     apiFetch('?action=save_goal', { body: payload }).then(function(d) {
         if (!d.ok) {

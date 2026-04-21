@@ -170,7 +170,7 @@ if (isset($_GET['action'])) {
                 $cost_usd = (float)$item['unit_cost_usd'];
                 // Rescue price: break-even formula (cost + $0.30 flat) / (1 - 10.9% fees)
                 // Floor: $1.00 for cost < $1.00, $2.00 for cost >= $1.00
-                $rescue   = round(($cost_usd + 0.30) / (1 - 0.109), 2);
+                $rescue   = round(($cost_usd + $wn_flat) / (1 - $wn_pct), 2);
                 $floor    = $cost_usd >= 1.00 ? 2.00 : 1.00;
                 $rescue   = max($floor, $rescue);
                 $insert->execute([$item['id'], $item['brand'], $item['description'], $item['upc'], $item['color'], $item['size'], $item['packaging_type'], $cost_usd, $rescue, $item['qty']]);
@@ -200,6 +200,8 @@ if (isset($_GET['action'])) {
         $cfg_row = $pdo->query("SELECT config_key, config_value FROM system_config")->fetchAll(PDO::FETCH_KEY_PAIR);
         $goal_amt        = (float)($cfg_row['goal_amount_usd'] ?? 60000);
         $streamer_hourly = (float)($cfg_row['streamer_hourly_usd'] ?? 50);
+        $wn_pct          = (float)($cfg_row['whatnot_pct_fee'] ?? 0.109);
+        $wn_flat         = (float)($cfg_row['whatnot_flat_fee'] ?? 0.30);
         $stream_cost     = round($stream_hours * $streamer_hourly, 2);
 
         jsonOk([
@@ -244,7 +246,7 @@ if (isset($_GET['action'])) {
             $units  = (int)$row['units'];
             $gross  = (float)$row['gross_revenue'];
             $cogs   = (float)$row['cogs'];
-            $fees   = round($gross * 0.109 + $units * 0.30, 2);
+            $fees   = round($gross * $wn_pct + $units * $wn_flat, 2);
             $net    = round($gross - $fees, 2);
             $profit = round($net - $cogs, 2);
             $groups[] = [
@@ -267,6 +269,8 @@ if (isset($_GET['action'])) {
 
         $cfg = $pdo->query("SELECT config_key, config_value FROM system_config")->fetchAll(PDO::FETCH_KEY_PAIR);
         $streamer_hourly = (float)($cfg['streamer_hourly_usd'] ?? 50);
+        $wn_pct          = (float)($cfg['whatnot_pct_fee'] ?? 0.109);
+        $wn_flat         = (float)($cfg['whatnot_flat_fee'] ?? 0.30);
         $stream_hours    = round($t_units * 5 / 3600, 1);
         $stream_cost     = round($stream_hours * $streamer_hourly, 2);
 
