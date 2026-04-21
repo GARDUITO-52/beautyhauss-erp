@@ -258,8 +258,8 @@ include __DIR__ . '/includes/sidebar.php';
             <span class="fw-bold"><?= fmtHhMm($stream_hours) ?></span>
           </div>
           <div class="d-flex justify-content-between mb-1">
-            <span class="text-muted small">Prods/show (<?= $show_duration ?>h)</span>
-            <span class="fw-bold text-info"><?= number_format($prods_per_show) ?></span>
+            <span class="text-muted small" id="calProdsLabel">Prods/show (<?= $show_duration ?>h)</span>
+            <span class="fw-bold text-info" id="calProdsPerShow"><?= number_format($prods_per_show) ?></span>
           </div>
           <!-- Show calculator -->
           <div class="mt-3 p-2 rounded" style="background:rgba(255,255,255,.05)">
@@ -316,8 +316,8 @@ include __DIR__ . '/includes/sidebar.php';
           <div class="small text-muted text-uppercase fw-semibold mb-2">Calendario <span class="badge bg-warning text-dark ms-1" style="font-size:.65rem">Shabbat off</span></div>
           <?php if ($days_needed > 0): ?>
           <div class="d-flex justify-content-between mb-1">
-            <span class="text-muted small">Shows/día (<?= $daily_hrs ?>h ÷ <?= $show_duration ?>h)</span>
-            <span class="fw-bold text-info"><?= $shows_per_day ?></span>
+            <span class="text-muted small" id="calShowsLabel">Shows/día (<?= $daily_hrs ?>h ÷ <?= $show_duration ?>h)</span>
+            <span class="fw-bold text-info" id="calShowsPerDay"><?= $shows_per_day ?></span>
           </div>
           <div class="d-flex justify-content-between mb-1">
             <span class="text-muted small">Días necesarios</span>
@@ -327,7 +327,7 @@ include __DIR__ . '/includes/sidebar.php';
             <span class="text-muted small">Semanas (6 días/sem)</span>
             <span class="fw-bold text-warning"><?= $weeks_needed ?> sem</span>
           </div>
-          <div class="text-muted mt-2" style="font-size:.7rem">Vie 6pm → Sáb 9pm bloqueado · <?= $show_duration ?>h/show</div>
+          <div class="text-muted mt-2" style="font-size:.7rem">Vie 6pm → Sáb 9pm bloqueado · <span id="calShowDurLabel"><?= $show_duration ?></span>h/show</div>
           <?php else: ?>
           <p class="text-muted small mb-0">Configura meta para ver proyección.</p>
           <?php endif ?>
@@ -474,10 +474,18 @@ include __DIR__ . '/includes/sidebar.php';
 </div>
 
 <script>
+var DAILY_HRS = <?= $daily_hrs ?>;
+
 function calcShow() {
-    var hrs = parseFloat(document.getElementById('showDurInput').value) || 0;
-    var prods = Math.floor(hrs * 3600 / 5);
-    document.getElementById('showCalcOut').textContent = prods.toLocaleString();
+    var hrs      = parseFloat(document.getElementById('showDurInput').value) || 0;
+    var prods    = Math.floor(hrs * 3600 / 5);
+    var spd      = hrs > 0 ? Math.floor(DAILY_HRS / hrs) : 0;
+    document.getElementById('showCalcOut').textContent    = prods.toLocaleString();
+    document.getElementById('calProdsPerShow').textContent = prods.toLocaleString();
+    document.getElementById('calProdsLabel').textContent  = 'Prods/show (' + hrs + 'h)';
+    document.getElementById('calShowsPerDay').textContent = spd;
+    document.getElementById('calShowsLabel').textContent  = 'Shows/día (' + DAILY_HRS + 'h ÷ ' + hrs + 'h)';
+    document.getElementById('calShowDurLabel').textContent = hrs;
 }
 document.addEventListener('DOMContentLoaded', calcShow);
 
