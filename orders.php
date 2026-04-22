@@ -15,6 +15,7 @@ if (isset($_GET['action'])) {
         $show_id  = (int)($_GET['show_id'] ?? 0);
         $status   = $_GET['status'] ?? '';
         $packed   = $_GET['packed'] ?? '';   // 'yes' | 'no' | ''
+        $tracking = $_GET['tracking'] ?? ''; // 'yes' | 'no' | ''
         $page     = max(1, (int)($_GET['page'] ?? 1));
         $limit    = 50; $offset = ($page - 1) * $limit;
 
@@ -24,15 +25,17 @@ if (isset($_GET['action'])) {
         if ($status)  { $conds[] = 'o.status = ?';  $params[] = $status; }
         if ($packed === 'no')  { $conds[] = 'o.packed_at IS NULL'; }
         if ($packed === 'yes') { $conds[] = 'o.packed_at IS NOT NULL'; }
+        if ($tracking === 'no')  { $conds[] = 'o.tracking_number IS NULL'; }
+        if ($tracking === 'yes') { $conds[] = 'o.tracking_number IS NOT NULL'; }
         $where = $conds ? 'WHERE ' . implode(' AND ', $conds) : '';
 
         $total = $pdo->prepare("SELECT COUNT(*) FROM orders o $where");
         $total->execute($params); $total = (int)$total->fetchColumn();
 
         if ($is_admin) {
-            $cols = "o.id, o.whatnot_order_id, o.buyer_username, o.sale_amount_usd, o.net_earnings_usd, o.cogs_usd, o.order_date, o.status, o.packed_at, u.name AS packed_by_name";
+            $cols = "o.id, o.whatnot_order_id, o.buyer_username, o.sale_amount_usd, o.net_earnings_usd, o.cogs_usd, o.order_date, o.status, o.packed_at, o.tracking_number, o.shipped_at, u.name AS packed_by_name";
         } else {
-            $cols = "o.id, o.whatnot_order_id, o.buyer_username, o.order_date, o.status, o.packed_at, u.name AS packed_by_name";
+            $cols = "o.id, o.whatnot_order_id, o.buyer_username, o.order_date, o.status, o.packed_at, o.tracking_number, o.shipped_at, u.name AS packed_by_name";
         }
 
         $stmt = $pdo->prepare("SELECT $cols
@@ -83,6 +86,18 @@ if (isset($_GET['action'])) {
         jsonOk();
     }
 
+    if ($action === 'save_tracking') {
+        csrfGuard();
+        $d   = json_decode(file_get_contents('php://input'), true) ?? [];
+        $id  = (int)($d['id'] ?? 0);
+        $trk = trim($d['tracking_number'] ?? '');
+        if (!$id || !$trk) jsonErr('ID y tracking requeridos.');
+        $pdo->prepare("UPDATE orders SET tracking_number=?, shipped_at=NOW() WHERE id=?")
+            ->execute([$trk, $id]);
+        logActivity($pdo, 'orders', 'save_tracking', $id, $trk);
+        jsonOk();
+    }
+
     if ($action === 'shows_list') {
         $rows = $pdo->query("SELECT id, title, scheduled_at FROM shows WHERE status IN ('COMPLETED','LIVE','SCHEDULED') ORDER BY scheduled_at DESC LIMIT 50")->fetchAll();
         jsonOk($rows);
@@ -118,15 +133,22 @@ include __DIR__ . '/includes/sidebar.php';
             <option value="">Todos los shows</option>
           </select>
         </div>
-        <div class="col-md-3">
+        <div class="col-md-2">
           <select id="packedFilter" class="form-select form-select-sm">
             <option value="">Todas las órdenes</option>
             <option value="no" selected>Por empacar</option>
             <option value="yes">Ya empacadas</option>
           </select>
         </div>
+        <div class="col-md-2">
+          <select id="trackingFilter" class="form-select form-select-sm">
+            <option value="">Todos los envios</option>
+            <option value="no">Sin tracking</option>
+            <option value="yes">Con tracking</option>
+          </select>
+        </div>
         <?php if ($is_admin): ?>
-        <div class="col-md-3">
+        <div class="col-md-2">
           <select id="statusFilter" class="form-select form-select-sm">
             <option value="">Todos los status</option>
             <option value="FULFILLED" selected>Fulfilled</option>
@@ -162,24 +184,62 @@ include __DIR__ . '/includes/sidebar.php';
   </div>
 </div>
 
+<!-- Modal: Tracking Number -->
+<div class="modal fade" id="modalTracking" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content bg-dark text-white">
+      <div class="modal-header border-secondary">
+        <h6 class="modal-title"><i class="bi bi-truck me-2"></i>Tracking USPS</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="trackingOrderId">
+        <label class="form-label text-muted small">Orden: <strong id="trackingOrderLabel"></strong></label>
+        <div class="input-group mt-2">
+          <input type="text" id="trackingInput" class="form-control bg-dark text-white border-secondary font-monospace"
+            placeholder="Escanea o escribe tracking..." autofocus>
+          <button type="button" class="btn btn-outline-secondary" id="btnScanCamera" title="Usar camara" onclick="startCameraScan()">
+            <i class="bi bi-camera"></i>
+          </button>
+        </div>
+        <div id="scannerContainer" class="mt-2 d-none">
+          <div id="qr-reader" style="width:100%"></div>
+        </div>
+        <div id="trackingError" class="alert alert-danger py-2 mt-2 d-none"></div>
+      </div>
+      <div class="modal-footer border-secondary">
+        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+        <button class="btn btn-sm fw-bold" style="background:#d4537e;color:#fff" onclick="saveTracking()">
+          <i class="bi bi-check2 me-1"></i>Guardar
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 var IS_ADMIN = <?= $is_admin ? 'true' : 'false' ?>;
 var _page    = 1;
+var _trackingModal = null;
 
 document.addEventListener('DOMContentLoaded', function() {
+    _trackingModal = new bootstrap.Modal(document.getElementById('modalTracking'));
     renderHead();
     loadShowsList();
     loadOrders();
-    ['showFilter','packedFilter' <?= $is_admin ? ",'statusFilter'" : '' ?>].forEach(function(id) {
+    ['showFilter','packedFilter','trackingFilter' <?= $is_admin ? ",'statusFilter'" : '' ?>].forEach(function(id) {
         var el = document.getElementById(id);
         if (el) el.addEventListener('change', function() { _page = 1; loadOrders(); });
     });
     document.getElementById('ordersBody').addEventListener('change', updatePackBtn);
+    document.getElementById('trackingInput').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') saveTracking();
+    });
 });
 
 function renderHead() {
-    var cols = ['<th><input type="checkbox" id="checkAll" onchange="toggleAll(this)"></th>','<th>Orden Whatnot</th>','<th>Buyer</th>','<th>Productos</th>','<th>Fecha</th>','<th>Estado empaque</th>'];
-    if (IS_ADMIN) cols.splice(4, 0, '<th>Venta USD</th>','<th>Net USD</th>');
+    var cols = ['<th><input type="checkbox" id="checkAll" onchange="toggleAll(this)"></th>','<th>Orden Whatnot</th>','<th>Buyer</th>','<th>Productos</th>','<th>Fecha</th>','<th>Empaque</th>','<th>Tracking USPS</th>'];
+    if (IS_ADMIN) cols.splice(4, 0, '<th>Venta</th>','<th>Net</th>');
     document.getElementById('ordersHead').innerHTML = '<tr>' + cols.join('') + '</tr>';
 }
 
@@ -199,8 +259,9 @@ function loadOrders(page) {
     _page = page || _page;
     var params = new URLSearchParams({
         action: 'list', page: _page,
-        show_id: document.getElementById('showFilter').value,
-        packed:  document.getElementById('packedFilter').value,
+        show_id:  document.getElementById('showFilter').value,
+        packed:   document.getElementById('packedFilter').value,
+        tracking: document.getElementById('trackingFilter').value,
     });
     if (IS_ADMIN) {
         var sf = document.getElementById('statusFilter');
@@ -222,12 +283,17 @@ function renderOrders(orders) {
             ? '<span class="badge bg-success"><i class="bi bi-check2"></i> Empacada</span>'
             + '<div class="text-muted" style="font-size:.7rem">' + formatTs(o.packed_at) + (o.packed_by_name ? ' · ' + esc(o.packed_by_name) : '') + '</div>'
             : '<span class="badge bg-warning text-dark">Por empacar</span>';
+        var tracking = o.tracking_number
+            ? '<span class="badge bg-info text-dark font-monospace" style="font-size:.7rem">' + esc(o.tracking_number) + '</span>'
+            + '<div class="text-muted" style="font-size:.65rem">' + formatTs(o.shipped_at) + '</div>'
+            : '<button class="btn btn-sm btn-outline-secondary py-0 px-2" style="font-size:.75rem" onclick="openTracking(' + o.id + ',\'' + esc(o.whatnot_order_id) + '\')">'
+            + '<i class="bi bi-truck me-1"></i>Agregar</button>';
         var items = (o.items || []).map(function(it) {
-            return '<div class="small"><span class="fw-semibold">' + esc(it.brand||'') + '</span> ' + esc(it.description) + ' ×' + it.qty
-                + (it.upc ? ' <span class="text-muted font-monospace">' + esc(it.upc) + '</span>' : '') + '</div>';
+            return '<div class="small"><span class="fw-semibold">' + esc(it.brand||'') + '</span> ' + esc(it.description) + ' x' + it.qty + '</div>';
         }).join('') || '<span class="text-muted small">Sin items</span>';
 
         var chk = !o.packed_at ? '<input type="checkbox" class="order-check" value="' + o.id + '">' : '<i class="bi bi-check2 text-success"></i>';
+        var rowClass = o.tracking_number ? 'table-primary' : (o.packed_at ? 'table-success' : '');
         var cells = [
             '<td>' + chk + '</td>',
             '<td class="fw-semibold small font-monospace">' + esc(o.whatnot_order_id) + '</td>',
@@ -235,12 +301,13 @@ function renderOrders(orders) {
             '<td>' + items + '</td>',
             '<td class="text-muted small">' + (o.order_date ? o.order_date : '—') + '</td>',
             '<td>' + packed + '</td>',
+            '<td>' + tracking + '</td>',
         ];
         if (IS_ADMIN) cells.splice(4, 0,
-            '<td>' + fmt2(o.sale_amount_usd) + '</td>',
-            '<td class="' + (parseFloat(o.net_earnings_usd) >= 0 ? 'text-success' : 'text-danger') + '">' + fmt2(o.net_earnings_usd) + '</td>'
+            '<td class="small">' + fmt2(o.sale_amount_usd) + '</td>',
+            '<td class="small ' + (parseFloat(o.net_earnings_usd) >= 0 ? 'text-success' : 'text-danger') + '">' + fmt2(o.net_earnings_usd) + '</td>'
         );
-        return '<tr class="' + (o.packed_at ? 'table-success' : '') + '">' + cells.join('') + '</tr>';
+        return '<tr class="' + rowClass + '">' + cells.join('') + '</tr>';
     }).join('');
 }
 
@@ -286,6 +353,54 @@ function formatTs(ts) {
 }
 
 function exportCsv() { window.location = '?action=export'; }
+
+function openTracking(orderId, orderLabel) {
+    document.getElementById('trackingOrderId').value = orderId;
+    document.getElementById('trackingOrderLabel').textContent = orderLabel;
+    document.getElementById('trackingInput').value = '';
+    document.getElementById('trackingError').classList.add('d-none');
+    document.getElementById('scannerContainer').classList.add('d-none');
+    _trackingModal.show();
+    setTimeout(function() { document.getElementById('trackingInput').focus(); }, 300);
+}
+
+function saveTracking() {
+    var id  = document.getElementById('trackingOrderId').value;
+    var trk = document.getElementById('trackingInput').value.trim();
+    if (!trk) {
+        document.getElementById('trackingError').textContent = 'Ingresa el numero de tracking.';
+        document.getElementById('trackingError').classList.remove('d-none'); return;
+    }
+    document.getElementById('trackingError').classList.add('d-none');
+    apiFetch('?action=save_tracking', { body: { id: parseInt(id), tracking_number: trk } }).then(function(d) {
+        if (!d.ok) { document.getElementById('trackingError').textContent = d.error; document.getElementById('trackingError').classList.remove('d-none'); return; }
+        _trackingModal.hide();
+        toast('Tracking guardado: ' + trk);
+        loadOrders();
+    });
+}
+
+function startCameraScan() {
+    var container = document.getElementById('scannerContainer');
+    container.classList.remove('d-none');
+    if (typeof Html5Qrcode === 'undefined') {
+        document.getElementById('trackingError').textContent = 'Escaner no disponible. Escribe el tracking manualmente.';
+        document.getElementById('trackingError').classList.remove('d-none');
+        container.classList.add('d-none'); return;
+    }
+    var scanner = new Html5Qrcode('qr-reader');
+    scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 250, height: 100 } },
+        function(text) {
+            document.getElementById('trackingInput').value = text;
+            scanner.stop().then(function() { container.classList.add('d-none'); });
+        },
+        function() {}
+    ).catch(function() {
+        document.getElementById('trackingError').textContent = 'No se pudo acceder a la camara.';
+        document.getElementById('trackingError').classList.remove('d-none');
+        container.classList.add('d-none');
+    });
+}
 </script>
 
 <?php include __DIR__ . '/includes/footer.php'; ?>

@@ -297,22 +297,67 @@ if (isset($_GET['action'])) {
         ]);
     }
 
+    // ── Global P&L ──
+    if ($action === 'global_pnl') {
+        // Inventory summary per batch
+        $inv = $pdo->query("
+            SELECT pb.id, pb.reference_no, pb.total_usd, pb.avg_cost_usd,
+                   COALESCE(SUM(pbi.qty), 0) AS total_qty,
+                   COALESCE((SELECT SUM(p.stock_qty) FROM products p WHERE p.purchase_batch_id = pb.id), 0) AS stock_qty
+            FROM purchase_batches pb
+            LEFT JOIN purchase_batch_items pbi ON pbi.batch_id = pb.id
+            GROUP BY pb.id ORDER BY pb.id ASC
+        ")->fetchAll();
+
+        // Orders P&L (actual sales)
+        $ord = $pdo->query("
+            SELECT COUNT(*) AS cnt,
+                   COALESCE(SUM(sale_amount_usd), 0) AS gross,
+                   COALESCE(SUM(fee_commission + fee_processing + fee_per_tx), 0) AS fees,
+                   COALESCE(SUM(net_earnings_usd), 0) AS net,
+                   COALESCE(SUM(cogs_usd), 0) AS cogs
+            FROM orders
+        ")->fetch();
+
+        // Expenses by category
+        $exp_rows = $pdo->query("SELECT category, COALESCE(SUM(amount_usd), 0) AS total FROM expenses GROUP BY category")->fetchAll();
+        $exp = [];
+        foreach ($exp_rows as $e) $exp[$e['category']] = (float)$e['total'];
+
+        jsonOk([
+            'inventory' => $inv,
+            'orders'    => [
+                'count' => (int)$ord['cnt'],
+                'gross' => (float)$ord['gross'],
+                'fees'  => (float)$ord['fees'],
+                'net'   => (float)$ord['net'],
+                'cogs'  => (float)$ord['cogs'],
+            ],
+            'expenses' => $exp,
+        ]);
+    }
+
     jsonErr('Acción no reconocida.', 400);
 }
 
 // ── Page ───────────────────────────────────────────────────────────────────
 $suppliers    = $pdo->query("SELECT id, name FROM suppliers ORDER BY name")->fetchAll();
-$page_title   = 'Lotes de Compra — beautyhauss ERP';
+$page_title   = 'Lotes de Compra - beautyhauss ERP';
 $current_page = 'batches';
 include __DIR__ . '/includes/header.php';
 include __DIR__ . '/includes/sidebar.php';
 ?>
 <div class="main-content">
-  <div class="d-flex justify-content-between align-items-center mb-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
     <h1 class="h3 mb-0 fw-bold">Lotes de Compra</h1>
     <button class="btn btn-sm fw-bold" style="background:#d4537e;color:#fff" onclick="openCreate()">
       <i class="bi bi-plus-lg me-1"></i>Nuevo lote
     </button>
+  </div>
+
+  <!-- Global P&L panel -->
+  <div id="globalPnlPanel" class="mb-4">
+    <div class="card shadow-sm"><div class="card-body text-muted text-center py-3 small">Cargando P&L…</div></div>
   </div>
 
   <div class="row g-3">
@@ -529,6 +574,7 @@ document.addEventListener('DOMContentLoaded', function() {
     _csvModal   = new bootstrap.Modal(document.getElementById('modalCsv'));
     _qsModal    = new bootstrap.Modal(document.getElementById('modalQuickSupplier'));
     loadBatches();
+    loadGlobalPnl();
 });
 
 function loadBatches() {
@@ -911,6 +957,104 @@ function renderPnl(pnl) {
         + '</div></div>'
         + '</div>'
     );
+}
+
+// ── Global P&L ──
+function loadGlobalPnl() {
+    apiFetch('?action=global_pnl').then(function(d) {
+        if (!d.ok) return;
+        renderGlobalPnl(d.data);
+    });
+}
+
+function renderGlobalPnl(d) {
+    var inv = d.inventory || [];
+    var ord = d.orders;
+    var exp = d.expenses || {};
+
+    // Inventory KPI rows
+    var totalBatchCost = 0, totalUnits = 0;
+    var invRows = inv.map(function(b) {
+        totalBatchCost += parseFloat(b.total_usd);
+        totalUnits += parseInt(b.total_qty);
+        var avgCost = parseFloat(b.avg_cost_usd) || 0;
+        return '<div class="d-flex justify-content-between align-items-center py-1 border-bottom border-secondary">'
+            + '<span class="text-muted small">' + esc(b.reference_no) + '</span>'
+            + '<span class="small">' + fmtN(b.stock_qty) + ' uds disponibles · avg <span class="text-warning fw-bold">' + fmt2(avgCost) + '</span>/ud</span>'
+            + '<span class="fw-bold text-info small">' + fmt2(b.total_usd) + '</span>'
+            + '</div>';
+    }).join('');
+    var globalAvg = totalUnits > 0 ? totalBatchCost / totalUnits : 0;
+
+    // P&L calcs
+    var gross    = ord.gross;
+    var fees     = ord.fees;
+    var net      = ord.net;
+    var cogs     = ord.cogs;
+    var grossPft = net - cogs;
+
+    var expCategories = { HOST_SALARY:'Streamers', PACKAGING:'Packaging', EQUIPMENT:'Equipo', MARKETING:'Marketing', PROMOTE_TOOLS:'Herramientas', WAREHOUSE_SHIPPING:'Envio/Bodega', OTRO:'Otros' };
+    var totalExp = 0;
+    var expRows = Object.keys(expCategories).filter(function(k){ return exp[k] > 0; }).map(function(k) {
+        totalExp += exp[k];
+        return '<div class="d-flex justify-content-between small py-1">'
+            + '<span class="text-muted">' + expCategories[k] + '</span>'
+            + '<span class="text-danger">' + fmt2(-exp[k]) + '</span>'
+            + '</div>';
+    }).join('');
+
+    var netProfit = grossPft - totalExp;
+    var netColor  = netProfit >= 0 ? 'text-success' : 'text-danger';
+    var margin    = gross > 0 ? (netProfit / gross * 100).toFixed(1) : 0;
+
+    // All-in cost per unit sold
+    var unitsSold = cogs > 0 && globalAvg > 0 ? Math.round(cogs / globalAvg) : 0;
+    var allInCost = unitsSold > 0 ? (cogs + totalExp) / unitsSold : 0;
+
+    var noSales = ord.count === 0;
+    var pnlContent = noSales
+        ? '<div class="text-muted text-center small py-2"><i class="bi bi-clock me-1"></i>Sin shows importados aun. El P&L se calculara aqui despues del primer show.</div>'
+        : '<div class="row g-3">'
+          + '<div class="col-md-4">'
+          + '<div class="text-muted small mb-1 fw-semibold">REVENUE</div>'
+          + '<div class="d-flex justify-content-between small py-1"><span class="text-muted">Ventas brutas (' + fmtN(ord.count) + ' ordenes)</span><span>' + fmt2(gross) + '</span></div>'
+          + '<div class="d-flex justify-content-between small py-1"><span class="text-muted">Fees Whatnot</span><span class="text-danger">' + fmt2(-fees) + '</span></div>'
+          + '<div class="d-flex justify-content-between small py-1 border-top border-secondary mt-1 pt-1 fw-semibold"><span>Net Revenue</span><span class="text-success">' + fmt2(net) + '</span></div>'
+          + '</div>'
+          + '<div class="col-md-4">'
+          + '<div class="text-muted small mb-1 fw-semibold">COGS + GASTOS</div>'
+          + '<div class="d-flex justify-content-between small py-1"><span class="text-muted">COGS (avg cost x unds)</span><span class="text-warning">' + fmt2(-cogs) + '</span></div>'
+          + '<div class="d-flex justify-content-between small py-1"><span class="text-muted">Gross Profit</span><span class="' + (grossPft>=0?'text-success':'text-danger') + '">' + fmt2(grossPft) + '</span></div>'
+          + (expRows || '<div class="text-muted small py-1">Sin gastos registrados</div>')
+          + '<div class="d-flex justify-content-between small py-1 border-top border-secondary mt-1 pt-1 fw-semibold"><span>Total Gastos Op.</span><span class="text-danger">' + fmt2(-totalExp) + '</span></div>'
+          + '</div>'
+          + '<div class="col-md-4 d-flex flex-column justify-content-center text-center border-start border-secondary">'
+          + '<div class="fw-bold fs-4 ' + netColor + '">' + fmt2(netProfit) + '</div>'
+          + '<div class="text-muted small mb-3">NET PROFIT (' + margin + '%)</div>'
+          + (allInCost > 0 ? '<div class="fw-bold text-warning">' + fmt2(allInCost) + '</div><div class="text-muted small">Costo all-in por unidad vendida</div>' : '')
+          + '</div>'
+          + '</div>';
+
+    document.getElementById('globalPnlPanel').innerHTML =
+        '<div class="card shadow-sm">'
+        + '<div class="card-header">'
+        + '<div class="row g-0">'
+        + '<div class="col">'
+        + '<div class="d-flex align-items-center gap-2 mb-2">'
+        + '<i class="bi bi-boxes text-info"></i><span class="fw-bold small">INVENTARIO</span>'
+        + '<span class="badge bg-secondary ms-auto">' + fmtN(totalUnits) + ' uds totales · avg global <span class="text-warning fw-bold">' + fmt2(globalAvg) + '</span>/ud</span>'
+        + '</div>'
+        + invRows
+        + '</div>'
+        + '</div>'
+        + '</div>'
+        + '<div class="card-body">'
+        + '<div class="d-flex align-items-center gap-2 mb-3">'
+        + '<i class="bi bi-graph-up-arrow text-success"></i><span class="fw-bold small">P&L GLOBAL — TODOS LOS SHOWS</span>'
+        + '</div>'
+        + pnlContent
+        + '</div>'
+        + '</div>';
 }
 
 // ── Generate Products ──
