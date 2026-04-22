@@ -74,10 +74,10 @@ if (isset($_GET['action'])) {
         $show->execute([$show_id]); $show = $show->fetch();
         if (!$show) jsonErr('Show no encontrado.', 404);
         $items = $pdo->prepare("
-            SELECT sp.id, sp.qty_listed, sp.starting_bid_usd, sp.whatnot_slot,
-                   p.brand, p.description, p.upc, p.color, p.size, p.stock_qty
+            SELECT sp.id, sp.qty_listed, sp.starting_bid_usd, sp.whatnot_slot, sp.item_type,
+                   p.brand, p.description, p.upc, p.color, p.size, p.stock_qty, p.retail_price_usd
             FROM show_products sp JOIN products p ON p.id = sp.product_id
-            WHERE sp.show_id = ? ORDER BY sp.whatnot_slot ASC, sp.id ASC");
+            WHERE sp.show_id = ? ORDER BY CAST(sp.whatnot_slot AS UNSIGNED) ASC, sp.id ASC");
         $items->execute([$show_id]);
         jsonOk(['show' => $show, 'items' => $items->fetchAll()]);
     }
@@ -161,18 +161,21 @@ if (isset($_GET['action'])) {
         }
         if ($action === 'add_product') {
             csrfGuard();
-            $d          = json_decode(file_get_contents('php://input'), true) ?? [];
-            $show_id    = (int)($d['show_id'] ?? 0);
-            $product_id = (int)($d['product_id'] ?? 0);
-            $qty        = (int)($d['qty_listed'] ?? 0);
-            $bid        = (float)($d['starting_bid_usd'] ?? 0);
+            $d           = json_decode(file_get_contents('php://input'), true) ?? [];
+            $show_id     = (int)($d['show_id'] ?? 0);
+            $product_id  = (int)($d['product_id'] ?? 0);
+            $qty         = (int)($d['qty_listed'] ?? 0);
+            $item_type   = in_array($d['item_type'] ?? '', ['product','giveaway','bundle']) ? $d['item_type'] : 'product';
             if (!$show_id || !$product_id || $qty < 1) jsonErr('Datos inválidos.');
             $dup = $pdo->prepare("SELECT id FROM show_products WHERE show_id=? AND product_id=?");
             $dup->execute([$show_id, $product_id]);
             if ($dup->fetch()) jsonErr('Este producto ya está en el lineup.');
-            $pdo->prepare("INSERT INTO show_products (show_id, product_id, qty_listed, starting_bid_usd) VALUES (?,?,?,?)")
-                ->execute([$show_id, $product_id, $qty, $bid]);
-            jsonOk(['id' => $pdo->lastInsertId()]);
+            $slotRow = $pdo->prepare("SELECT COALESCE(MAX(CAST(whatnot_slot AS UNSIGNED)), 0) FROM show_products WHERE show_id=?");
+            $slotRow->execute([$show_id]);
+            $nextSlot = str_pad((int)$slotRow->fetchColumn() + 1, 3, '0', STR_PAD_LEFT);
+            $pdo->prepare("INSERT INTO show_products (show_id, product_id, qty_listed, item_type, whatnot_slot) VALUES (?,?,?,?,?)")
+                ->execute([$show_id, $product_id, $qty, $item_type, $nextSlot]);
+            jsonOk(['id' => $pdo->lastInsertId(), 'slot' => $nextSlot]);
         }
         if ($action === 'remove_product') {
             csrfGuard();
@@ -545,17 +548,24 @@ function renderLineup(show, items) {
         + '<i class="bi bi-download me-1"></i>Para Daniel</a>'
         + '<a href="?action=download_template&show_id=' + show.id + '" class="btn btn-sm btn-outline-secondary" title="Template post-show">'
         + '<i class="bi bi-file-earmark-arrow-down me-1"></i>Template post-show</a>'
-        + '<button class="btn btn-sm fw-bold" style="background:#d4537e;color:#fff" onclick="toggleAddPanel()">'
-        + '<i class="bi bi-plus-lg me-1"></i>Agregar</button>'
+        + '<button class="btn btn-sm fw-bold" style="background:#d4537e;color:#fff" onclick="toggleAddPanel(\'product\')">'
+        + '<i class="bi bi-box me-1"></i>Producto</button>'
+        + '<button class="btn btn-sm fw-bold" style="background:#6f42c1;color:#fff" onclick="toggleAddPanel(\'giveaway\')">'
+        + '<i class="bi bi-gift me-1"></i>Giveaway</button>'
+        + '<button class="btn btn-sm fw-bold" style="background:#0d6efd;color:#fff" onclick="toggleAddPanel(\'bundle\')">'
+        + '<i class="bi bi-collection me-1"></i>Bundle</button>'
         + '</div>' : '';
 
+    var TYPE_BADGES = { product: '', giveaway: '<span class="badge ms-1" style="background:#6f42c1;font-size:.65rem">GIVEAWAY</span>', bundle: '<span class="badge ms-1 bg-primary" style="font-size:.65rem">BUNDLE</span>' };
     var rows = items.length ? items.map(function(item) {
-        var slotCell = IS_ADMIN
-            ? '<td><span class="badge bg-secondary font-monospace slot-badge" style="cursor:pointer;min-width:2.5rem" '
+        var slotColor = item.item_type === 'giveaway' ? '#6f42c1' : item.item_type === 'bundle' ? '#0d6efd' : (item.whatnot_slot ? '#d4537e' : 'secondary');
+        var slotBg    = (item.item_type !== 'product' || item.whatnot_slot) ? 'style="background:' + slotColor + ';cursor:pointer;min-width:2.5rem"' : 'class="badge bg-secondary font-monospace slot-badge"';
+        var slotCell  = IS_ADMIN
+            ? '<td><span class="badge font-monospace slot-badge" style="background:' + slotColor + ';cursor:pointer;min-width:2.5rem" '
               + 'onclick="editSlot(this,' + item.id + ',' + show.id + ')" title="Click para editar slot">'
-              + esc(item.whatnot_slot || '—') + '</span></td>'
-            : '<td class="font-monospace text-muted small">' + esc(item.whatnot_slot || '—') + '</td>';
-        var bidCell = IS_ADMIN ? '<td class="text-warning">' + fmt2(item.starting_bid_usd) + '</td>' : '';
+              + esc(item.whatnot_slot || '—') + '</span>' + (TYPE_BADGES[item.item_type] || '') + '</td>'
+            : '<td class="font-monospace text-muted small">' + esc(item.whatnot_slot || '—') + (TYPE_BADGES[item.item_type] || '') + '</td>';
+        var retailCell = '<td class="text-success fw-semibold">' + (item.retail_price_usd ? fmt2(item.retail_price_usd) : '<span class="text-muted">—</span>') + '</td>';
         var delCell = IS_ADMIN
             ? '<td><button class="btn btn-sm btn-outline-danger py-0 px-1" onclick="removeProduct(' + item.id + ',' + show.id + ')">'
               + '<i class="bi bi-trash"></i></button></td>'
@@ -568,18 +578,21 @@ function renderLineup(show, items) {
             + '<td>' + esc(item.color || '—') + '</td>'
             + '<td>' + esc(item.size || '—') + '</td>'
             + '<td class="fw-bold">' + item.qty_listed + '</td>'
-            + bidCell
+            + retailCell
             + delCell
             + '</tr>';
-    }).join('') : '<tr><td colspan="10" class="text-center text-muted py-3">Sin productos en el lineup.</td></tr>';
+    }).join('') : '<tr><td colspan="9" class="text-center text-muted py-3">Sin productos en el lineup.</td></tr>';
 
-    var bidHeader = IS_ADMIN ? '<th>Bid Inicial</th>' : '';
     var delHeader = IS_ADMIN ? '<th></th>' : '';
     var addPanel  = IS_ADMIN ? ''
         + '<div id="addPanel" class="d-none p-3 border-top border-secondary">'
-        + '<div class="input-group input-group-sm mb-2">'
+        + '<div class="d-flex align-items-center gap-2 mb-2">'
+        + '<span id="addPanelTypeBadge" class="badge" style="font-size:.8rem"></span>'
+        + '<input type="hidden" id="selItemType" value="product">'
+        + '<div class="input-group input-group-sm flex-grow-1">'
         + '<input type="text" id="prodSearch" class="form-control bg-dark text-white border-secondary" placeholder="Buscar marca, descripción, SKU, UPC…" oninput="searchProducts(this.value)">'
         + '<button class="btn btn-outline-secondary" type="button" onclick="clearAddForm()">✕</button>'
+        + '</div>'
         + '</div>'
         + '<div id="searchResults"></div>'
         + '<div id="addForm" class="d-none mt-2">'
@@ -588,8 +601,6 @@ function renderLineup(show, items) {
         + '<span id="selProductLabel" class="text-info small flex-grow-1"></span>'
         + '<label class="text-muted small mb-0">Qty</label>'
         + '<input type="number" id="selQty" class="form-control form-control-sm bg-dark text-white border-secondary" style="width:75px" min="1" value="1">'
-        + '<label class="text-muted small mb-0">Bid $</label>'
-        + '<input type="number" id="selBid" class="form-control form-control-sm bg-dark text-white border-secondary" style="width:85px" step="0.01" min="0">'
         + '<button class="btn btn-sm btn-success" onclick="addProduct(' + show.id + ')"><i class="bi bi-check-lg me-1"></i>Agregar</button>'
         + '</div>'
         + '</div>'
@@ -610,7 +621,7 @@ function renderLineup(show, items) {
         + addPanel
         + '<div class="card-body p-0">'
         + '<table class="table table-sm mb-0">'
-        + '<thead class="table-dark"><tr><th>Slot</th><th>Marca</th><th>Descripción</th><th>UPC</th><th>Color</th><th>Talla</th><th>Qty</th>' + bidHeader + delHeader + '</tr></thead>'
+        + '<thead class="table-dark"><tr><th>Slot</th><th>Marca</th><th>Descripción</th><th>UPC</th><th>Color</th><th>Talla</th><th>Qty</th><th>Retail</th>' + delHeader + '</tr></thead>'
         + '<tbody>' + rows + '</tbody>'
         + '</table>'
         + '</div>'
@@ -886,13 +897,27 @@ function deleteShow(id) {
 var _searchTimer   = null;
 var _searchResults = [];
 
-function toggleAddPanel() {
+var TYPE_COLORS = { product: '#d4537e', giveaway: '#6f42c1', bundle: '#0d6efd' };
+var TYPE_LABELS = { product: 'Producto', giveaway: 'Giveaway', bundle: 'Bundle' };
+
+function toggleAddPanel(type) {
+    type = type || 'product';
     var panel = document.getElementById('addPanel');
     if (!panel) return;
-    panel.classList.toggle('d-none');
-    if (!panel.classList.contains('d-none')) {
-        document.getElementById('prodSearch').focus();
-    }
+    var isOpen = !panel.classList.contains('d-none');
+    var currentType = document.getElementById('selItemType') ? document.getElementById('selItemType').value : '';
+    if (isOpen && currentType === type) { clearAddForm(); return; }
+    panel.classList.remove('d-none');
+    document.getElementById('selItemType').value = type;
+    var badge = document.getElementById('addPanelTypeBadge');
+    badge.textContent = TYPE_LABELS[type];
+    badge.style.background = TYPE_COLORS[type];
+    badge.style.color = '#fff';
+    clearTimeout(_searchTimer);
+    document.getElementById('searchResults').innerHTML = '';
+    document.getElementById('addForm').classList.add('d-none');
+    document.getElementById('prodSearch').value = '';
+    document.getElementById('prodSearch').focus();
 }
 
 function searchProducts(q) {
@@ -949,14 +974,14 @@ function clearAddForm() {
 function addProduct(showId) {
     var pidEl = document.getElementById('selProductId');
     if (!pidEl || !pidEl.value) { toast('Selecciona un producto primero.', 'error'); return; }
-    var qty = parseInt(document.getElementById('selQty').value);
-    var bid = parseFloat(document.getElementById('selBid').value) || 0;
+    var qty      = parseInt(document.getElementById('selQty').value);
+    var itemType = document.getElementById('selItemType').value || 'product';
     if (!qty || qty < 1) { toast('Qty debe ser ≥ 1.', 'error'); return; }
     apiFetch('?action=add_product', { body: {
-        show_id: showId, product_id: parseInt(pidEl.value), qty_listed: qty, starting_bid_usd: bid
+        show_id: showId, product_id: parseInt(pidEl.value), qty_listed: qty, item_type: itemType
     }}).then(function(d) {
         if (!d.ok) { toast(d.error, 'error'); return; }
-        toast('Producto agregado al lineup.');
+        toast(TYPE_LABELS[itemType] + ' agregado — slot ' + d.data.slot + '.');
         clearAddForm();
         loadLineup(showId);
     });
