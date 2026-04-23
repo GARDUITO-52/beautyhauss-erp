@@ -3,6 +3,35 @@
   <a href="/dashboard" class="d-flex align-items-center mb-3 text-white text-decoration-none">
     <span class="fs-5 fw-bold">💄 beautyhauss</span>
   </a>
+
+  <!-- Dual clock -->
+  <div class="rounded p-2 mb-3" style="background:rgba(255,255,255,.07);font-size:.72rem">
+    <div class="d-flex justify-content-between align-items-center mb-1">
+      <span class="text-white-50">🌴 Miami</span>
+      <span class="fw-bold text-white font-monospace" id="clk-miami">--:-- --</span>
+    </div>
+    <div class="d-flex justify-content-between align-items-center">
+      <span class="text-white-50">🌮 CDMX</span>
+      <span class="fw-bold text-white-75 font-monospace" id="clk-cdmx">--:-- --</span>
+    </div>
+  </div>
+  <script>
+  (function() {
+    var miamiTz = 'America/New_York';
+    var cdmxTz  = 'America/Mexico_City';
+    var fmtOpts = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true, timeZone: '' };
+    function tick() {
+      var now = new Date();
+      var mo = Object.assign({}, fmtOpts, { timeZone: miamiTz });
+      var co = Object.assign({}, fmtOpts, { timeZone: cdmxTz  });
+      document.getElementById('clk-miami').textContent = now.toLocaleTimeString('en-US', mo);
+      document.getElementById('clk-cdmx').textContent  = now.toLocaleTimeString('en-US', co);
+    }
+    tick();
+    setInterval(tick, 1000);
+  })();
+  </script>
+
   <hr>
   <ul class="nav nav-pills flex-column mb-auto">
     <li class="nav-item">
@@ -10,6 +39,8 @@
         <i class="bi bi-speedometer2 me-2"></i>Dashboard
       </a>
     </li>
+
+    <li class="nav-item mt-2"><span class="text-white-50 px-2" style="font-size:.65rem;text-transform:uppercase;letter-spacing:.08em">Operación</span></li>
     <li>
       <a href="/shows" class="nav-link text-white <?= ($current_page ?? '') === 'shows' ? 'active' : '' ?>">
         <i class="bi bi-camera-video me-2"></i>Shows
@@ -27,17 +58,19 @@
     </li>
 
     <?php if ($__isAdmin): ?>
-    <hr class="text-white">
-    <li>
-      <a href="/suppliers" class="nav-link text-white <?= ($current_page ?? '') === 'suppliers' ? 'active' : '' ?>">
-        <i class="bi bi-building me-2"></i>Proveedores
-      </a>
-    </li>
+    <li class="nav-item mt-2"><span class="text-white-50 px-2" style="font-size:.65rem;text-transform:uppercase;letter-spacing:.08em">Compras</span></li>
     <li>
       <a href="/purchase_batches" class="nav-link text-white <?= ($current_page ?? '') === 'batches' ? 'active' : '' ?>">
         <i class="bi bi-inboxes me-2"></i>Lotes de Compra
       </a>
     </li>
+    <li>
+      <a href="/suppliers" class="nav-link text-white <?= ($current_page ?? '') === 'suppliers' ? 'active' : '' ?>">
+        <i class="bi bi-building me-2"></i>Proveedores
+      </a>
+    </li>
+
+    <li class="nav-item mt-2"><span class="text-white-50 px-2" style="font-size:.65rem;text-transform:uppercase;letter-spacing:.08em">Equipo</span></li>
     <li>
       <a href="/hosts" class="nav-link text-white <?= ($current_page ?? '') === 'hosts' ? 'active' : '' ?>">
         <i class="bi bi-person-video3 me-2"></i>Hosts
@@ -48,18 +81,15 @@
         <i class="bi bi-receipt me-2"></i>Gastos
       </a>
     </li>
-    <hr class="text-white">
-    <li>
-      <a href="/calculator" class="nav-link text-white <?= ($current_page ?? '') === 'calculator' ? 'active' : '' ?>">
-        <i class="bi bi-calculator me-2"></i>Calculadora
-      </a>
-    </li>
+
+    <li class="nav-item mt-2"><span class="text-white-50 px-2" style="font-size:.65rem;text-transform:uppercase;letter-spacing:.08em">Análisis</span></li>
     <li>
       <a href="/reports" class="nav-link text-white <?= ($current_page ?? '') === 'reports' ? 'active' : '' ?>">
         <i class="bi bi-bar-chart me-2"></i>Reportes
       </a>
     </li>
-    <hr class="text-white">
+
+    <li class="nav-item mt-2"><span class="text-white-50 px-2" style="font-size:.65rem;text-transform:uppercase;letter-spacing:.08em">Sistema</span></li>
     <li>
       <a href="/users" class="nav-link text-white <?= ($current_page ?? '') === 'users' ? 'active' : '' ?>">
         <i class="bi bi-people me-2"></i>Usuarios
